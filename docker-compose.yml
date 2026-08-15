@@ -1,0 +1,54 @@
+# ============================================================
+# Production docker-compose for OmniAgent
+# ============================================================
+
+services:
+  omniagent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: omniagent:latest
+    container_name: omniagent
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    volumes:
+      # Persist SQLite DB across restarts
+      - omniagent_data:/app/data
+      # Persist log files
+      - omniagent_logs:/app/logs
+
+    # Resource limits (adjust for your homelab)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 128M
+
+    # Graceful shutdown timeout
+    stop_grace_period: 30s
+
+    # Logging configuration
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  omniagent_data:
+    driver: local
+  omniagent_logs:
+    driver: local
