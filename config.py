@@ -28,11 +28,11 @@ class Settings(BaseSettings):
     # ── Google Gemini ──────────────────────────────────────────────────────────
     gemini_api_key: Optional[str] = Field(default=None)
     gemini_model: str = Field(
-        default="gemini-3.5-flash",
+        default="gemini-2.5-flash",
         description="Gemini model name",
     )
     gemini_model_pro: str   = Field(default="gemini-2.5-pro")
-    gemini_model_flash: str = Field(default="gemini-3.5-flash")
+    gemini_model_flash: str = Field(default="gemini-2.5-flash")
     gemini_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     gemini_max_output_tokens: int = Field(default=8192)
 

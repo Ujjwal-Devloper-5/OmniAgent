@@ -6,7 +6,7 @@ System prompt pulled from shared base — no duplication.
 
 from __future__ import annotations
 
-from core.agents.base import SHARED_SYSTEM_PROMPT, AgentResponse, BaseAgent, ModelProvider, TaskType
+from core.agents.base import build_system_prompt, AgentResponse, BaseAgent, ModelProvider, TaskType
 from core.logger import get_logger
 from config import settings
 
@@ -32,6 +32,9 @@ class AnthropicAgent(BaseAgent):
         task_type: TaskType = TaskType.GENERAL,
         max_retries: int = 3,
         platform_system_note: str = "",
+        needs_vision: bool = False,
+        image_data: bytes | None = None,
+        image_mime: str = "image/jpeg",
     ) -> AgentResponse:
         if not settings.anthropic_api_key:
             return AgentResponse(
@@ -60,7 +63,7 @@ class AnthropicAgent(BaseAgent):
         tools = get_tools()
 
         async def _call() -> AgentResponse:
-            effective_prompt = SHARED_SYSTEM_PROMPT + platform_system_note
+            effective_prompt = build_system_prompt(platform_system_note)
             async with AsyncSqliteSaver.from_conn_string(settings.db_path) as checkpointer:
                 agent = create_react_agent(
                     llm, tools, checkpointer=checkpointer, prompt=effective_prompt,

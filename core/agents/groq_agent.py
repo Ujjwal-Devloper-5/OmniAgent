@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 
-from core.agents.base import SHARED_SYSTEM_PROMPT, AgentResponse, BaseAgent, ModelProvider, TaskType
+from core.agents.base import build_system_prompt, AgentResponse, BaseAgent, ModelProvider, TaskType
 from core.logger import get_logger
 from config import settings
 
@@ -33,6 +33,7 @@ _GROQ_TASK_MODELS: dict[TaskType, str] = {
     TaskType.ANALYSIS: "llama-3.3-70b-versatile",
     TaskType.QUICK:    "llama-3.1-8b-instant",
     TaskType.GENERAL:  "llama-3.3-70b-versatile",
+    TaskType.VISION:   "llama-3.1-8b-instant",   # text-only fallback for vision tasks
 }
 
 
@@ -65,6 +66,9 @@ class GroqAgent(BaseAgent):
         task_type: TaskType = TaskType.GENERAL,
         max_retries: int = 3,
         platform_system_note: str = "",
+        needs_vision: bool = False,
+        image_data: bytes | None = None,
+        image_mime: str = "image/jpeg",
     ) -> AgentResponse:
         if not settings.groq_api_key:
             return AgentResponse(
@@ -95,7 +99,7 @@ class GroqAgent(BaseAgent):
         log.info("Groq | task=%s model=%s session=%s", task_type.value, model_name, session_id)
 
         async def _call() -> AgentResponse:
-            effective_prompt = SHARED_SYSTEM_PROMPT + platform_system_note
+            effective_prompt = build_system_prompt(platform_system_note)
             async with AsyncSqliteSaver.from_conn_string(settings.db_path) as checkpointer:
                 agent = create_react_agent(
                     llm, tools, checkpointer=checkpointer, prompt=effective_prompt,

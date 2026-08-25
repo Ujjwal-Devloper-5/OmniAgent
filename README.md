@@ -1,70 +1,130 @@
-# OmniAgent
+<div align="center">
 
-A multi-platform AI assistant built for Discord and Telegram. It leverages Google Gemini 2.5 Pro via LangGraph to provide persistent conversation memory and tool use capabilities. 
+# 🌌 OmniAgent 2.0
 
-## Features
+**The Ultimate Smart Multi-Agent AI Framework for Discord & Telegram**
 
-- **Multi-Platform Support**: Seamlessly works on both Discord and Telegram.
-- **Persistent Memory**: Uses a local SQLite database to maintain conversation history per user.
-- **ReAct Agent**: Capable of step-by-step reasoning and tool execution.
-- **Built-in Tools**: Includes tools for web search, Wikipedia lookup, math evaluation, time checking, sandboxed Python execution, weather, and fetching URL content.
-- **Production Ready**: Includes structured logging, rate limiting, and docker support.
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg?style=for-the-badge)](https://www.python.org/downloads/)
+[![Docker Ready](https://img.shields.io/badge/docker-ready-blue.svg?style=for-the-badge)](https://www.docker.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+[![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg?style=for-the-badge)](#)
 
-## Project Structure
+OmniAgent is a production-grade AI assistant featuring **zero-latency model routing**, **native multimodal vision**, and a **persistent bulletproof Docker sandbox**.
 
-- `main.py`: The main entry point. Initializes logging and starts bots.
-- `config.py`: Configuration management using Pydantic.
-- `core/`: Core logic including the LangGraph agent, rate limiting, and helpers.
-- `tools/`: Implementations for the various tools the agent can use.
-- `adapters/`: Platform-specific bots (Discord and Telegram).
+[Features](#-enterprise-features) • [Architecture](#%EF%B8%8F-system-architecture) • [Quickstart](#-quickstart) • [Contributing](#-contributing)
 
-## Setup
+</div>
 
-### Prerequisites
+---
 
-- Python 3.12 or higher.
-- `uv` package manager (or `pip`).
-- API keys for Google Gemini, and tokens for your Discord and/or Telegram bots.
+## ✨ Enterprise Features
 
-### Installation
+### 🧠 Smart Multi-Provider Routing
+Zero-latency heuristics instantly route requests to the most capable AI model for the task.
+* **Speed:** Routes to **Groq** LPUs for instant quick replies.
+* **Complex Logic & Math:** Routes to **Gemini 2.5 Pro** or **OpenAI**.
+* **Local Fallback:** Auto-routes to **Ollama** (e.g., `qwen2.5-coder`) if cloud providers are offline.
 
-1. Clone the repository and navigate into the directory.
-2. Copy the `.env.example` file to `.env` and fill in your API keys.
+### 👁️ True Native Multimodal Vision
+OmniAgent doesn't just read URLs—it natively intercepts Discord/Telegram media, buffers the raw bytes, and streams pixel data directly to Vision SDKs (like `google-generativeai`) for flawless, high-fidelity image analysis.
 
-   ```bash
-   cp .env.example .env
-   ```
+### 💾 Cross-Model Unified Memory
+Powered by LangGraph and `aiosqlite`, OmniAgent maintains a continuous thread of context. You can start a conversation with *Gemini*, switch to *Claude*, and finish with *DeepSeek*—without ever losing context.
 
-3. Install the dependencies using `uv`:
+### 🛡️ Bulletproof Execution Sandbox
+Every agent gets access to a deeply isolated, ephemeral Linux Docker container to write scripts, install `pip` packages, and execute code with strict CPU/RAM/PID resource quotas and persistent user workspaces.
 
-   ```bash
-   uv sync
-   ```
+### 🔌 Model Context Protocol (MCP) Ready
+Native support for extending your agent's capabilities dynamically. Connect external MCP servers (Google Drive, GitHub, local filesystems) without touching a single line of core code.
 
-### Running Locally
+### ⚡ Zero-Downtime OpenRouter Daemon
+A background prober fetches and validates OpenRouter's 200+ free models every 12 hours. Dead or rate-limited models are aggressively pruned from the routing pool, eliminating `404/429` cascades.
 
-To run the bot in your development environment:
+### 👤 UjjwalBrain (Continuous Profiling)
+A dedicated background task constantly analyzes interactions to build a persistent profile of the owner's tech stack, projects, and preferences, seamlessly injecting this context into the system prompt.
 
-```bash
-uv run python main.py
+---
+
+## 🏗️ System Architecture
+
+```mermaid
+graph TD
+    User((User)) <--> |Messages & Images| Gateway[Discord / Telegram Gateways]
+    Gateway <--> Router{Smart Model Router}
+    
+    Router -->|Creative / 200+ Models| OR[OpenRouter API]
+    Router -->|Complex / Vision| Gem[Google Gemini 2.5]
+    Router -->|Offline / Local Vision| Ollama[Ollama Local Engine]
+    Router -->|Lightning Fast| Groq[Groq LPU]
+    
+    Gem <--> Graph[LangGraph Tool Engine]
+    Graph <--> Sandbox[(Docker Sandbox)]
+    Graph <--> MCP[MCP Servers]
+    Graph <--> Mem[(Unified SQLite Memory)]
 ```
 
-### Docker Deployment
+---
 
-For a production or homelab environment, deploying via Docker is recommended.
+## 🚀 Quickstart
 
+### 1. Prerequisites
+* **Python 3.12+** or **Docker**
+* `uv` package manager (recommended for blazing fast builds)
+* Platform Tokens (Discord/Telegram) and at least one LLM API Key.
+
+### 2. Configuration
 ```bash
-docker-compose up -d --build
+git clone https://github.com/Ujjwal-Developer-5/OmniAgent.git
+cd OmniAgent
+cp .env.example .env
+# Edit .env with your keys
 ```
 
-Logs can be viewed with:
-
+### 3. Deploy (Docker - Recommended)
+OmniAgent uses a multi-stage, `uv`-powered Docker build for sub-second dependency resolution.
 ```bash
+DOCKER_BUILDKIT=1 docker-compose up -d --build
 docker-compose logs -f omniagent
 ```
 
-Volumes are configured to persist your SQLite database and log files automatically.
+### 4. Local Development
+```bash
+uv sync
+uv run python main.py
+```
 
-## License
+---
 
-This project is licensed under the MIT License. See the LICENSE file for more details.
+## 🧰 Built-in Toolset
+The agent is equipped with a runtime-injected, context-aware tool registry:
+* **Execution:** `run_sandbox_command`, `execute_python`
+* **Filesystem:** `read_file`, `write_file`, `list_files`, `write_sandbox_file`
+* **Memory:** `remember_note`, `recall_notes`
+* **Utilities:** `web_search`, `calculate`, `get_weather`, `get_current_datetime`, `fetch_url`
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions from the community! OmniAgent is built to be modular and highly extensible.
+
+### How to Contribute
+1. **Fork** the repository
+2. **Create a branch:** `git checkout -b feature/AmazingFeature`
+3. **Commit changes:** `git commit -m 'Add some AmazingFeature'`
+4. **Push:** `git push origin feature/AmazingFeature`
+5. **Open a Pull Request**
+
+### Contributors & Core Team
+* **Ujjwal Kumar** - *Founder & Lead Architect* - [@Ujjwal-Developer-5](https://github.com/Ujjwal-Developer-5)
+
+<a href="https://github.com/Ujjwal-Developer-5/OmniAgent/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Ujjwal-Developer-5/OmniAgent" alt="Contributors" />
+</a>
+
+---
+
+<div align="center">
+  Made with ❤️ by Ujjwal Kumar and Contributors.<br>
+  Released under the <b>MIT License</b>.
+</div>

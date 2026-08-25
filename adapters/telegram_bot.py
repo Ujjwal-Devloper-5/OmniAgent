@@ -73,6 +73,7 @@ async def _handle_ai_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     text: str,
+    has_media: bool = False,
 ) -> None:
     """Core AI message handler for Telegram."""
     if not update.message:
@@ -95,7 +96,9 @@ async def _handle_ai_message(
     )
 
     try:
-        response = await process_message(session_id, text, platform="telegram")
+        response = await process_message(
+            session_id, text, platform="telegram", has_media=has_media,
+        )
 
         # Record token usage
         await rate_limiter.record_tokens(
@@ -262,6 +265,7 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             message=query,
             platform="telegram",
             force_provider=provider,
+            has_media=False,
         )
         await rate_limiter.record_tokens(f"telegram_{user_id}", len(response) // 4)
         await _send_long_message(update, response)
@@ -297,33 +301,35 @@ async def handle_callback_query(
 async def handle_photo(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Handle photo messages — prompt AI to describe or analyse."""
+    """Handle photo messages — route to vision-capable model."""
     if not update.message:
         return
-    caption = update.message.caption or "Please describe or analyse this image."
+    caption = update.message.caption or "Please describe or analyse this image in detail."
     await _handle_ai_message(
         update,
         context,
-        f"[User sent a photo with caption: '{caption}'] "
-        f"Please acknowledge that you received a photo (you cannot see images directly) "
-        f"and help them based on the caption: {caption}",
+        f"[User sent a photo] Caption: '{caption}'. "
+        f"Please analyse or describe it based on the caption provided.",
+        has_media=True,
     )
 
 
 async def handle_document(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Handle document messages."""
+    """Handle document messages — route to capable model."""
     if not update.message:
         return
     doc = update.message.document
     caption = update.message.caption or ""
+    file_info = f"'{doc.file_name}' (type: {doc.mime_type}, size: {doc.file_size} bytes)"
     await _handle_ai_message(
         update,
         context,
-        f"User sent a file: '{doc.file_name}' (type: {doc.mime_type}). "
-        f"Caption: '{caption}'. "
-        f"I cannot read file contents directly, but help them based on the filename and caption.",
+        f"User sent a file: {file_info}. "
+        f"Caption/instruction: '{caption}'. "
+        f"Help them with this file based on its name, type, and the caption provided.",
+        has_media=True,
     )
 
 

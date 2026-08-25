@@ -34,6 +34,10 @@ dependencies = [
     "langchain-anthropic>=1.5.4",
     "langchain-ollama>=1.1.0",
     "langchain-groq>=1.1.3",
+    # MCP (Model Context Protocol) — connect to external MCP servers
+    "mcp>=1.0.0",
+    "langchain-mcp-adapters>=0.1.0",
+    "google-generativeai>=0.8.6",
 ]
 
 [project.scripts]

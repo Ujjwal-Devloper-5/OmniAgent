@@ -26,20 +26,40 @@ async def _run_bots() -> None:
     from adapters.telegram_bot import start_telegram
     from config import settings
     from core.health_monitor import run_health_monitor
-    from core.model_router import get_router
+    from core.agent import warm_up_router
 
-    # Warm up the router singleton (initialises all agent backends)
-    router = get_router()
-    health = await router.get_health_report_async()
+    # ── MCP Server Initialization ─────────────────────────────────────────────
+    # Connect to configured MCP servers and load their tools before providers are probed.
+    # This ensures MCP tools are part of the agent tool list from the very first request.
+    from tools.mcp_manager import initialize_mcp
+    log.info("Initializing MCP servers...")
+    await initialize_mcp()
+
+    # ── Boot-time parallel provider probe ─────────────────────────────────────
+    # Probes ALL providers concurrently (8s timeout each).
+    # After this, all route() calls use the cached results — zero latency.
+    log.info("Probing all AI providers in parallel...")
+    await warm_up_router()
+
+    from core.model_router import get_router
+    health = await get_router().get_health_report_async()
     configured = [p for p, info in health.items() if info["configured"]]
+    vision_caps = [p for p, info in health.items() if "vision" in info.get("capabilities", [])]
 
     log.info("=" * 65)
-    log.info("  OmniAgent v2.0.0  —  Multi-Agent Edition")
+    log.info("  OmniAgent v2.0.0  —  Smart Multi-Agent Edition")
     log.info("  Configured providers : %s", configured or ["NONE"])
+    log.info("  Vision-capable       : %s", vision_caps or ["none"])
     log.info("  Fallback order       : %s", settings.fallback_order_list)
     log.info("  DB                   : %s", settings.db_path)
     log.info("  Discord              : %s", "enabled" if settings.discord_token else "disabled")
     log.info("  Telegram             : %s", "enabled" if settings.telegram_token else "disabled")
+
+    # Log every registered tool so it's visible in docker logs
+    from tools.registry import get_tool_summary
+    for line in get_tool_summary().splitlines():
+        log.info("  %s", line)
+
     log.info("=" * 65)
 
     if not configured:
@@ -69,6 +89,12 @@ async def _run_bots() -> None:
     # Background health monitor
     tasks.append(
         asyncio.create_task(run_health_monitor(), name="health_monitor")
+    )
+
+    # Background OpenRouter free-model prober (runs 30s after boot, then every 12h)
+    from tools.openrouter_prober import run_openrouter_prober_loop
+    tasks.append(
+        asyncio.create_task(run_openrouter_prober_loop(), name="openrouter_prober")
     )
 
     log.info("All services started. Press Ctrl+C to stop.")

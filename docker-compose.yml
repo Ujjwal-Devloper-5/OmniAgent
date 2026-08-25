@@ -1,5 +1,5 @@
 # ============================================================
-# Production docker-compose for OmniAgent
+# Production docker-compose for OmniAgent v3
 # ============================================================
 
 services:
@@ -15,20 +15,43 @@ services:
     env_file:
       - .env
 
+    environment:
+      # Docker-in-Docker: override OLLAMA URL so container reaches host Ollama
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+
+    # Add the host's docker group (GID 958) so the container can access /var/run/docker.sock
+    # Run: stat -c '%g' /var/run/docker.sock  to verify this matches your host
+    group_add:
+      - "958"
+
+    # On Linux, host.docker.internal doesn't exist by default — add it.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
     volumes:
-      # Persist SQLite DB across restarts
+      # ─── Source code mount ───────────────────────────────────────────────────
+      # Mount the project source read-only so code changes are instant —
+      # no rebuild needed, just `docker compose restart`.
+      - .:/app:ro
+      # Keep the baked .venv writable (uv needs to write .lock files)
+      # This anonymous volume sits on top of the ro mount for /app/.venv only.
+      - omniagent_venv:/app/.venv
+      # Persist SQLite DB across restarts (writable override of the ro mount)
       - omniagent_data:/app/data
       # Persist log files
       - omniagent_logs:/app/logs
+      # ─── Docker socket for sandbox tool ─────────────────────────────────────
+      - /var/run/docker.sock:/var/run/docker.sock
 
     # Resource limits (adjust for your homelab)
+    # Note: sandbox containers have their own limits (256MB, 50% CPU each)
     deploy:
       resources:
         limits:
-          memory: 512M
-          cpus: '1.0'
+          memory: 768M       # Increased to account for sandbox management overhead
+          cpus: '2.0'
         reservations:
-          memory: 128M
+          memory: 256M
 
     # Graceful shutdown timeout
     stop_grace_period: 30s
@@ -48,6 +71,8 @@ services:
       start_period: 30s
 
 volumes:
+  omniagent_venv:
+    driver: local
   omniagent_data:
     driver: local
   omniagent_logs:

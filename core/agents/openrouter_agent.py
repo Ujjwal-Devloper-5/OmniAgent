@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 
-from core.agents.base import SHARED_SYSTEM_PROMPT, AgentResponse, BaseAgent, ModelProvider, TaskType
+from core.agents.base import build_system_prompt, AgentResponse, BaseAgent, ModelProvider, TaskType
 from core.logger import get_logger
 from config import settings
 
@@ -66,35 +66,31 @@ class OpenRouterAgent(BaseAgent):
     def _pick_model(self, task_type: TaskType) -> str:
         """
         Select the best OpenRouter model for this task type.
-        Prefers free models unless premium is configured.
+
+        Priority rule: the FIRST model in openrouter_free_models_list is always
+        the primary.  We only deviate for coding tasks where deepseek is better.
+        We deliberately do NOT match 'nemotron' for anything — it ignores system
+        prompts about tools and has hardcoded behaviour we can't override.
         """
         free_models = settings.openrouter_free_models_list
-        premium_model = settings.openrouter_model
+        primary = settings.openrouter_model  # configured primary model
 
-        # For quick tasks always use the fastest free model
-        if task_type == TaskType.QUICK:
-            return free_models[0] if free_models else premium_model
+        if not free_models:
+            return primary
 
-        # For coding tasks, prefer DeepSeek or Llama if free
-        coding_free = next(
-            (m for m in free_models if any(x in m for x in ["deepseek", "llama", "qwen"])),
-            None,
-        )
-        if task_type == TaskType.CODING and coding_free:
-            return coding_free
+        # For coding: prefer deepseek/qwen if available, else primary
+        if task_type == TaskType.CODING:
+            coding_model = next(
+                (m for m in free_models if any(x in m for x in ["deepseek", "qwen", "code"])),
+                free_models[0],
+            )
+            return coding_model
 
-        # For creative tasks, prefer larger models
-        creative_free = next(
-            (m for m in free_models if any(x in m for x in ["llama-3.1", "mistral", "gemma-3"])),
-            None,
-        )
-        if task_type == TaskType.CREATIVE and creative_free:
-            return creative_free
+        # For all other tasks: always use the primary/first model.
+        # gemma-4-31b is first in our list — it's multimodal, supports tools,
+        # and does NOT have hardcoded tool-list beliefs like nemotron.
+        return free_models[0]
 
-        # Default: use configured primary model or first free model
-        if premium_model and ":free" not in premium_model:
-            return premium_model
-        return free_models[0] if free_models else premium_model
 
     async def process_message(
         self,
@@ -104,6 +100,9 @@ class OpenRouterAgent(BaseAgent):
         task_type: TaskType = TaskType.GENERAL,
         max_retries: int = 3,
         platform_system_note: str = "",
+        needs_vision: bool = False,
+        image_data: bytes | None = None,
+        image_mime: str = "image/jpeg",
     ) -> AgentResponse:
         if not settings.openrouter_api_key:
             return AgentResponse(
@@ -121,37 +120,62 @@ class OpenRouterAgent(BaseAgent):
         except ImportError as exc:
             raise RuntimeError(f"OpenRouter dependencies missing: {exc}")
 
-        model_name = self._pick_model(task_type)
-        llm = self._make_llm(model_name)
         tools = get_tools()
 
-        log.info(
-            "OpenRouter | task=%s model=%s session=%s",
-            task_type.value, model_name, session_id,
+        # Build the full candidate model list: primary + all fallbacks (deduplicated)
+        primary = self._pick_model(task_type)
+        free_list = settings.openrouter_free_models_list or []
+        candidates: list[str] = []
+        for m in [primary] + free_list:
+            if m and m not in candidates:
+                candidates.append(m)
+
+        last_error: Exception | None = None
+
+        for model_name in candidates:
+            llm = self._make_llm(model_name)
+            log.info("OpenRouter | task=%s model=%s session=%s", task_type.value, model_name, session_id)
+
+            async def _call(m=model_name, _llm=llm) -> AgentResponse:
+                effective_prompt = build_system_prompt(platform_system_note)
+                async with AsyncSqliteSaver.from_conn_string(settings.db_path) as checkpointer:
+                    agent = create_react_agent(
+                        _llm, tools, checkpointer=checkpointer, prompt=effective_prompt,
+                    )
+                    config = {"configurable": {"thread_id": session_id}}
+                    inputs = {"messages": [("user", message)]}
+                    final_state = await agent.ainvoke(inputs, config=config)
+                    content = final_state["messages"][-1].content
+                    if not content or not content.strip():
+                        raise ValueError("Empty response from OpenRouter")
+                    return AgentResponse(
+                        content=content,
+                        provider=self.provider,
+                        model_name=m,
+                        session_id=session_id,
+                        task_type=task_type,
+                        tokens_used=len(content) // 4,
+                    )
+
+            try:
+                return await _call()
+            except Exception as exc:
+                err_str = str(exc)
+                is_skip_error = any(x in err_str.lower() for x in [
+                    "429", "rate", "rate-limited", "404", "unavailable", "not found"
+                ])
+                if is_skip_error:
+                    log.warning("OpenRouter | model=%s failed/unavailable, trying next in list", model_name)
+                    last_error = exc
+                    continue  # ← try the next model
+                # Unhandled error: raise immediately
+                raise
+
+        # All models exhausted
+        raise RuntimeError(
+            f"openrouter: all {len(candidates)} free models rate-limited. "
+            f"Last error: {last_error}"
         )
-
-        async def _call() -> AgentResponse:
-            effective_prompt = SHARED_SYSTEM_PROMPT + platform_system_note
-            async with AsyncSqliteSaver.from_conn_string(settings.db_path) as checkpointer:
-                agent = create_react_agent(
-                    llm, tools, checkpointer=checkpointer, prompt=effective_prompt,
-                )
-                config = {"configurable": {"thread_id": f"{session_id}:openrouter"}}
-                inputs = {"messages": [("user", message)]}
-                final_state = await agent.ainvoke(inputs, config=config)
-                content = final_state["messages"][-1].content
-                if not content or not content.strip():
-                    raise ValueError("Empty response from OpenRouter")
-                return AgentResponse(
-                    content=content,
-                    provider=self.provider,
-                    model_name=model_name,
-                    session_id=session_id,
-                    task_type=task_type,
-                    tokens_used=len(content) // 4,
-                )
-
-        return await self._retry(_call, session_id, max_retries)
 
     async def clear_memory(self, session_id: str) -> None:
         await self._clear_sqlite_memory(session_id, "openrouter")

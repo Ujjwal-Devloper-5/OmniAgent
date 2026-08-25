@@ -1,20 +1,42 @@
 """
-Smart Model Router — the brain of the multi-agent system.
+Smart Model Router v3 — Enterprise-Grade Intelligence
+═══════════════════════════════════════════════════════
 
-Supports 6 providers:
-  - Gemini     (Google, paid — best reasoning & research)
-  - OpenAI     (paid — best coding)
-  - Anthropic  (paid — best creative writing)
-  - Groq       (FREE — ultra-fast Llama/Mixtral/Gemma via LPU)
-  - OpenRouter (FREE tier — 200+ models including Llama, Mistral, DeepSeek)
-  - Ollama     (FREE — fully local/offline fallback)
+Routing Philosophy
+──────────────────
+  TIER 1 — Premium paid APIs (OpenAI, Anthropic)
+      Best quality, use if keys present.
 
-Routing logic:
-  1. Zero-latency keyword-based task classification
-  2. Task → preferred provider order mapping
-  3. Skip unconfigured or unhealthy providers
-  4. Full fallback chain until one succeeds
-  5. Background health monitor keeps state fresh
+  TIER 2 — Free online APIs (Gemini FREE, Groq FREE, OpenRouter FREE)
+      Excellent quality, zero system load, internet-dependent.
+      YOUR PRIMARY TIER — you have Gemini + OpenRouter here.
+
+  TIER 3 — Local Ollama
+      Fully offline, uses YOUR hardware.
+      Used as fallback when BOTH tier 1 & 2 fail,
+      OR when the task REQUIRES local capability (e.g. media/vision
+      and no online vision provider is configured or available).
+
+Media / Vision Routing Intelligence
+─────────────────────────────────────
+  When a message contains a file or photo (has_media=True):
+  1. Router checks which ONLINE providers support vision (Gemini, OpenAI, Anthropic)
+  2. If any online vision provider is available → use it (smart, free, no GPU)
+  3. If NO online vision provider is available BUT Ollama has qwen2.5vl installed
+     → IMMEDIATELY route to local Ollama multimodal (zero wait, no hallucination)
+  4. Never send vision tasks to Groq/OpenRouter (they cannot process media)
+     → they become TEXT-ONLY fallbacks if everything else fails
+
+Boot-Time Capability Detection
+───────────────────────────────
+  All providers probed in parallel at startup (8s timeout each).
+  Ollama model capabilities detected from installed model list.
+  Cached → zero latency per message routing.
+
+Health Tracking
+───────────────
+  3 consecutive failures → provider quarantined for 5 minutes.
+  Auto-recovers. Dead providers skipped instantly (no timeout wait).
 """
 
 from __future__ import annotations
@@ -33,7 +55,7 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Per-platform max response length (characters) injected as system instructions
+# Per-platform max response length (characters)
 # ─────────────────────────────────────────────────────────────────────────────
 _PLATFORM_LIMITS: dict[str, int] = {
     "discord":  1900,
@@ -42,7 +64,26 @@ _PLATFORM_LIMITS: dict[str, int] = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Task Classifier — zero latency, pure keyword scoring
+# Provider capability matrix
+# ─────────────────────────────────────────────────────────────────────────────
+# Defines what each provider's API/tier can handle.
+# Ollama's vision capability is determined dynamically from installed models.
+
+_PROVIDER_CAPS: dict[ModelProvider, set[str]] = {
+    ModelProvider.OPENAI:     {"text", "vision", "coding", "math", "creative", "research", "analysis", "quick", "general"},
+    ModelProvider.ANTHROPIC:  {"text", "vision", "creative", "analysis", "research", "coding", "math", "general", "quick"},
+    ModelProvider.GEMINI:     {"text", "vision", "research", "math", "analysis", "coding", "creative", "general", "quick"},
+    ModelProvider.GROQ:       {"text", "coding", "math", "creative", "research", "analysis", "general", "quick"},   # NO vision
+    ModelProvider.OPENROUTER: {"text", "coding", "creative", "research", "general", "quick"},                       # NO vision on free tier
+    ModelProvider.OLLAMA:     {"text", "general", "quick"},   # vision added dynamically if multimodal model installed
+}
+
+# Providers that CAN handle vision/media (checked against _PROVIDER_CAPS dynamically)
+_VISION_CAPABLE = {"vision", "multimodal"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Task Classifier — zero-latency, pure keyword heuristic
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CODING_KEYWORDS = frozenset({
@@ -53,6 +94,7 @@ _CODING_KEYWORDS = frozenset({
     "trace", "dockerfile", "yaml", "json", "html", "css", "bash", "shell",
     "git", "repository", "deploy", "kubernetes", "docker", "lambda", "async",
     "database", "orm", "flask", "fastapi", "django", "react", "vue", "angular",
+    "fix", "solve", "implement", "build", "create function", "write a function",
 })
 
 _MATH_KEYWORDS = frozenset({
@@ -61,7 +103,7 @@ _MATH_KEYWORDS = frozenset({
     "algebra", "calculus", "geometry", "trigonometry", "logarithm", "factorial",
     "series", "limit", "differential", "linear", "quadratic", "polynomial",
     "optimise", "maximize", "minimize", "distribution", "correlation", "variance",
-    "standard deviation", "regression", "hypothesis",
+    "regression", "hypothesis", "arithmetic", "percentage", "ratio", "fraction",
 })
 
 _CREATIVE_KEYWORDS = frozenset({
@@ -69,7 +111,7 @@ _CREATIVE_KEYWORDS = frozenset({
     "character", "plot", "narrative", "lyric", "song", "haiku", "sonnet",
     "brainstorm", "imagine", "invent", "roleplay", "metaphor", "analogy",
     "describe", "draft", "compose", "screenplay", "dialogue", "blog", "article",
-    "summarize", "rewrite", "paraphrase", "tone", "style", "voice",
+    "summarize", "rewrite", "paraphrase", "tone", "style", "voice", "caption",
 })
 
 _RESEARCH_KEYWORDS = frozenset({
@@ -78,28 +120,27 @@ _RESEARCH_KEYWORDS = frozenset({
     "history", "biography", "fact", "information", "research", "source",
     "reference", "explain", "definition", "meaning", "origin", "founded",
     "invented", "discovered", "population", "capital", "president", "ceo",
+    "tell me about", "what are", "how does",
 })
 
 _QUICK_PATTERNS = frozenset({
     "hi", "hello", "hey", "thanks", "thank you", "ok", "okay", "yes", "no",
     "sure", "great", "good", "bye", "goodbye", "help", "what can you do",
-    "how are you", "who are you", "ping",
+    "how are you", "who are you", "ping", "test",
 })
 
 
-def classify_task(message: str) -> TaskType:
+def classify_task(message: str, has_media: bool = False) -> TaskType:
     """
     Classify a message into a TaskType using keyword heuristics.
-    Fast — zero API calls, pure Python.
-
-    Returns
-    -------
-    TaskType
-        The best-matching task category.
+    Zero API calls, pure Python — called before any LLM interaction.
     """
+    if has_media:
+        return TaskType.VISION
+
     lower = message.lower().strip()
 
-    # Very short messages / common greetings → QUICK
+    # Very short common greetings → QUICK (use fastest provider)
     if len(lower) < 40 and any(lower.startswith(p) for p in _QUICK_PATTERNS):
         return TaskType.QUICK
 
@@ -115,7 +156,7 @@ def classify_task(message: str) -> TaskType:
     if best_score >= 1:
         return best_type
 
-    # Long messages tend to need more analysis
+    # Long messages → ANALYSIS
     if len(lower) > 300:
         return TaskType.ANALYSIS
 
@@ -123,21 +164,33 @@ def classify_task(message: str) -> TaskType:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Provider preference map — best provider per task type
-# Order matters: first available + healthy one wins
+# Task → Provider Preference Ordering
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# Design: ONLINE providers (Gemini, OpenRouter, Groq) always BEFORE local Ollama.
+# Rationale: Online = free, no GPU, better intelligence. Local = fallback only.
+# Exception: VISION tasks — online vision providers first, then Ollama multimodal.
+#
+# YOUR SETUP EFFECTIVE ROUTING:
+#   You have: Gemini ✅  OpenRouter ✅  Ollama ✅
+#   You lack: OpenAI ✗  Anthropic ✗  Groq ✗ (no key)
+#
+#   Text tasks: Gemini → OpenRouter → Ollama
+#   Vision:     Gemini → Ollama (qwen2.5vl)   [OR has no vision on free]
+#   Coding:     Gemini → OpenRouter → Ollama (qwen2.5-coder)
+#   Quick:      Gemini → OpenRouter → Ollama
 
 _TASK_PREFERENCES: dict[TaskType, list[ModelProvider]] = {
-    # Code: OpenAI GPT-4o best, Groq Llama fast, Gemini, then free fallbacks
+    # Coding: OpenAI GPT-4o best, Claude good, then Gemini, Groq (fast!), OpenRouter, Ollama-coder
     TaskType.CODING: [
         ModelProvider.OPENAI,
-        ModelProvider.GROQ,
-        ModelProvider.GEMINI,
         ModelProvider.ANTHROPIC,
+        ModelProvider.GEMINI,
+        ModelProvider.GROQ,
         ModelProvider.OPENROUTER,
         ModelProvider.OLLAMA,
     ],
-    # Math: Gemini best for reasoning, then OpenAI, Groq Llama 70B
+    # Math: Gemini best reasoning + tools, OpenAI, Groq (fast), Claude, OpenRouter, Ollama
     TaskType.MATH: [
         ModelProvider.GEMINI,
         ModelProvider.OPENAI,
@@ -146,7 +199,7 @@ _TASK_PREFERENCES: dict[TaskType, list[ModelProvider]] = {
         ModelProvider.OPENROUTER,
         ModelProvider.OLLAMA,
     ],
-    # Creative: Claude best, then Gemini, OpenAI
+    # Creative: Claude best, Gemini, OpenAI, Groq, OpenRouter, Ollama
     TaskType.CREATIVE: [
         ModelProvider.ANTHROPIC,
         ModelProvider.GEMINI,
@@ -155,7 +208,7 @@ _TASK_PREFERENCES: dict[TaskType, list[ModelProvider]] = {
         ModelProvider.OPENROUTER,
         ModelProvider.OLLAMA,
     ],
-    # Research: Gemini (best with tools), then OpenAI
+    # Research: Gemini (has search tools), OpenAI, Anthropic, Groq, OpenRouter, Ollama
     TaskType.RESEARCH: [
         ModelProvider.GEMINI,
         ModelProvider.OPENAI,
@@ -164,7 +217,7 @@ _TASK_PREFERENCES: dict[TaskType, list[ModelProvider]] = {
         ModelProvider.OPENROUTER,
         ModelProvider.OLLAMA,
     ],
-    # Analysis: Gemini, Claude, OpenAI
+    # Analysis: Gemini, Claude, OpenAI, Groq, OpenRouter, Ollama
     TaskType.ANALYSIS: [
         ModelProvider.GEMINI,
         ModelProvider.ANTHROPIC,
@@ -173,7 +226,7 @@ _TASK_PREFERENCES: dict[TaskType, list[ModelProvider]] = {
         ModelProvider.OPENROUTER,
         ModelProvider.OLLAMA,
     ],
-    # Quick: Groq is blazing fast (free!), then Gemini Flash, OpenRouter free
+    # Quick: Groq (blazing fast LPU!), Gemini Flash, OpenRouter free, then others
     TaskType.QUICK: [
         ModelProvider.GROQ,
         ModelProvider.GEMINI,
@@ -182,7 +235,7 @@ _TASK_PREFERENCES: dict[TaskType, list[ModelProvider]] = {
         ModelProvider.ANTHROPIC,
         ModelProvider.OLLAMA,
     ],
-    # General: Gemini as default, then full fallback chain
+    # General: Gemini default, then full online chain, Ollama last
     TaskType.GENERAL: [
         ModelProvider.GEMINI,
         ModelProvider.OPENAI,
@@ -190,6 +243,16 @@ _TASK_PREFERENCES: dict[TaskType, list[ModelProvider]] = {
         ModelProvider.GROQ,
         ModelProvider.OPENROUTER,
         ModelProvider.OLLAMA,
+    ],
+    # Vision/Media: online vision providers FIRST (they're better + free), then local multimodal
+    # Groq and OpenRouter do NOT support vision → they are TEXT-ONLY fallbacks here
+    TaskType.VISION: [
+        ModelProvider.OPENAI,       # GPT-4o — multimodal, if key present
+        ModelProvider.ANTHROPIC,    # Claude — multimodal, if key present
+        ModelProvider.GEMINI,       # Gemini Flash — multimodal, FREE tier ✅
+        ModelProvider.OLLAMA,       # qwen2.5vl — local multimodal, instant
+        ModelProvider.GROQ,         # text-only fallback
+        ModelProvider.OPENROUTER,   # text-only fallback
     ],
 }
 
@@ -212,15 +275,16 @@ class _ProviderHealth:
 
 class ModelRouter:
     """
-    Routes messages to the best available AI provider with automatic fallback.
+    Routes messages to the best available AI provider.
 
-    Features:
-    ─ Zero-latency task classification
-    ─ Per-task provider preference ordering  
-    ─ Health tracking with automatic recovery
-    ─ Full fallback chain across all 6 providers
-    ─ Configurable via settings.fallback_order
-    ─ Supports forcing a specific provider
+    Core features:
+    ─ Boot-time parallel provider probe → cached availability (zero per-msg latency)
+    ─ Online-first routing (Gemini/OpenRouter/Groq before Ollama)
+    ─ Media/vision aware routing (Gemini → Ollama multimodal)
+    ─ Capability matrix per provider
+    ─ Health tracking with quarantine + auto-recovery
+    ─ Instant skip of unconfigured/dead providers
+    ─ Ollama per-task model selection (coder, multimodal, reasoning, etc.)
     """
 
     def __init__(self) -> None:
@@ -246,7 +310,14 @@ class ModelRouter:
         self._settings = settings
         self._lock = asyncio.Lock()
 
-        # Parse configured fallback order
+        # Cached boot-time availability
+        self._cached_available: dict[ModelProvider, bool] = {
+            p: False for p in ModelProvider
+        }
+        self._boot_probe_done: bool = False
+        self._boot_probe_lock = asyncio.Lock()
+
+        # Parse configured fallback order (from .env)
         fallback: list[ModelProvider] = []
         for name in settings.fallback_order_list:
             try:
@@ -260,6 +331,64 @@ class ModelRouter:
             len(self._agents),
             [p.value for p in self._fallback_order],
         )
+
+    # ── Boot-time parallel probe ───────────────────────────────────────────────
+
+    async def probe_all_providers(self) -> None:
+        """
+        Probe all providers in parallel at boot time.
+        Results are cached so route() calls have zero probe latency.
+        Also detects Ollama vision capability dynamically.
+        """
+        async with self._boot_probe_lock:
+            if self._boot_probe_done:
+                return
+
+            log.info("Boot probe: checking all providers in parallel...")
+
+            async def _probe_one(provider: ModelProvider, agent) -> tuple[ModelProvider, bool]:
+                try:
+                    result = await asyncio.wait_for(agent.is_available(), timeout=8.0)
+                    return provider, bool(result)
+                except Exception as exc:
+                    log.debug("Provider %s probe failed: %s", provider.value, exc)
+                    return provider, False
+
+            results = await asyncio.gather(
+                *[_probe_one(p, a) for p, a in self._agents.items()],
+                return_exceptions=False,
+            )
+
+            configured = []
+            for provider, available in results:
+                self._cached_available[provider] = available
+                if available:
+                    configured.append(provider.value)
+
+            # Dynamically update Ollama capabilities based on installed models
+            ollama_agent = self._agents.get(ModelProvider.OLLAMA)
+            ollama_has_vision = False
+            if ollama_agent and hasattr(ollama_agent, "has_vision_capability"):
+                ollama_has_vision = ollama_agent.has_vision_capability()
+                if ollama_has_vision:
+                    _PROVIDER_CAPS[ModelProvider.OLLAMA] |= {"vision", "multimodal"}
+                    log.info("Ollama: vision/multimodal capability detected (qwen2.5vl or similar)")
+
+            self._boot_probe_done = True
+
+            # Log the effective routing for this setup
+            vision_providers = [
+                p.value for p in ModelProvider
+                if self._cached_available.get(p) and
+                   (_PROVIDER_CAPS.get(p, set()) & _VISION_CAPABLE)
+            ]
+
+            log.info(
+                "Boot probe complete | configured=[%s] | vision=[%s] | ollama_vision=%s",
+                ", ".join(configured) or "NONE",
+                ", ".join(vision_providers) or "none",
+                ollama_has_vision,
+            )
 
     # ── Health helpers ────────────────────────────────────────────────────────
 
@@ -280,6 +409,7 @@ class ModelRouter:
         h.failures = 0
         h.is_healthy = True
         h.last_success = time.monotonic()
+        self._cached_available[provider] = True
 
     def _record_failure(self, provider: ModelProvider) -> None:
         h = self._health[provider]
@@ -293,26 +423,53 @@ class ModelRouter:
                 )
             h.is_healthy = False
 
-    async def _available_providers(self) -> list[ModelProvider]:
-        """Return providers that are configured AND currently healthy."""
-        result = []
-        for provider, agent in self._agents.items():
-            if await agent.is_available() and self._is_healthy(provider):
-                result.append(provider)
-        return result
+    def _get_available_providers(self) -> list[ModelProvider]:
+        """
+        Return providers that are configured AND healthy.
+        Uses boot-time cache — ZERO network calls per message.
+        """
+        return [
+            p for p in ModelProvider
+            if self._cached_available.get(p, False) and self._is_healthy(p)
+        ]
 
-    def _priority_list(
+    def _build_priority_list(
         self,
         task_type: TaskType,
         available: list[ModelProvider],
+        needs_vision: bool = False,
     ) -> list[ModelProvider]:
-        """Build ordered provider list for this task, filtered to available."""
+        """
+        Build ordered provider list for this task, filtered to available providers.
+
+        For vision tasks:
+        - Vision-capable providers come FIRST
+        - Text-only providers come AFTER as fallbacks (they'll handle it as text)
+
+        Always: online providers before local Ollama (except vision tasks where
+        local multimodal may be better than online text-only providers).
+        """
         preferred = _TASK_PREFERENCES.get(task_type, list(ModelProvider))
-        ordered = [p for p in preferred if p in available]
-        # Append any available provider not in the preferred list
+
+        if needs_vision:
+            # Split: vision-capable vs text-only
+            vision_first = [
+                p for p in preferred
+                if p in available and (_PROVIDER_CAPS.get(p, set()) & _VISION_CAPABLE)
+            ]
+            text_fallbacks = [
+                p for p in preferred
+                if p in available and p not in vision_first
+            ]
+            ordered = vision_first + text_fallbacks
+        else:
+            ordered = [p for p in preferred if p in available]
+
+        # Append any available provider not already in the list
         for p in self._fallback_order:
             if p in available and p not in ordered:
                 ordered.append(p)
+
         return ordered
 
     # ── Main routing entry point ───────────────────────────────────────────────
@@ -323,50 +480,65 @@ class ModelRouter:
         message:        str,
         platform:       str = "unknown",
         force_provider: Optional[ModelProvider] = None,
+        has_media:      bool = False,
+        image_data:     bytes | None = None,
+        image_mime:     str = "image/jpeg",
     ) -> AgentResponse:
         """
         Route a message to the best available provider.
 
-        Parameters
-        ----------
-        session_id     : Unique conversation thread ID.
-        message        : The user's message text.
-        platform       : Platform name for logging.
-        force_provider : Skip routing and use this provider directly.
+        Intelligence:
+        1. Lazy boot probe if not done yet (only first call)
+        2. Classify task (VISION if media present)
+        3. For vision: online vision providers → local multimodal → text fallback
+        4. For text: premium tier → free online → local Ollama
+        5. Skip unhealthy/unconfigured instantly
+        6. Fallback through chain until one succeeds
 
-        Returns
-        -------
-        AgentResponse from whichever provider succeeded.
-
-        Raises
-        ------
-        RuntimeError if ALL providers fail or none are configured.
+        image_data: downloaded image bytes passed to vision-capable providers.
+        image_mime: MIME type of the image (e.g. 'image/png').
         """
-        task_type = classify_task(message)
-        available = await self._available_providers()
+        # Lazy boot probe on first message (subsequent calls use cache)
+        if not self._boot_probe_done:
+            await self.probe_all_providers()
+
+        task_type = classify_task(message, has_media=has_media)
+
+        needs_vision = has_media or task_type == TaskType.VISION
+        available = self._get_available_providers()
 
         log.info(
-            "Routing | session=%s platform=%s task=%s available=[%s]",
-            session_id, platform, task_type.value,
+            "Routing | session=%s platform=%s task=%s media=%s available=[%s]",
+            session_id, platform, task_type.value, has_media,
             ", ".join(p.value for p in available),
         )
 
         if not available:
+            # Emergency: re-probe Ollama (it might be starting up)
+            ollama = self._agents[ModelProvider.OLLAMA]
+            try:
+                if await asyncio.wait_for(ollama.is_available(), timeout=5.0):
+                    self._cached_available[ModelProvider.OLLAMA] = True
+                    available = [ModelProvider.OLLAMA]
+                    log.info("Ollama came online during emergency probe")
+            except Exception:
+                pass
+
+        if not available:
             raise RuntimeError(
                 "❌ No AI providers are available!\n"
-                "Configure at least one of:\n"
-                "  • GEMINI_API_KEY (https://aistudio.google.com)\n"
-                "  • GROQ_API_KEY   (https://console.groq.com) ← FREE\n"
-                "  • OPENROUTER_API_KEY (https://openrouter.ai) ← FREE tier\n"
-                "  • OPENAI_API_KEY / ANTHROPIC_API_KEY\n"
-                "  • Or run Ollama locally (fully offline)"
+                "At least one must be configured:\n"
+                "  • GEMINI_API_KEY  → https://aistudio.google.com  (free)\n"
+                "  • OPENROUTER_API_KEY → https://openrouter.ai     (free)\n"
+                "  • GROQ_API_KEY    → https://console.groq.com     (free)\n"
+                "  • Or run Ollama locally (fully offline)\n"
+                "See .env.example for setup instructions."
             )
 
         if force_provider:
             if force_provider in available:
                 priority = [force_provider]
-                # Add fallbacks after the forced one
-                for p in self._priority_list(task_type, available):
+                for p in self._build_priority_list(task_type, available, needs_vision):
                     if p not in priority:
                         priority.append(p)
             else:
@@ -374,32 +546,38 @@ class ModelRouter:
                     "Forced provider %s not available, using auto-routing",
                     force_provider.value,
                 )
-                priority = self._priority_list(task_type, available)
+                priority = self._build_priority_list(task_type, available, needs_vision)
         else:
-            priority = self._priority_list(task_type, available)
+            priority = self._build_priority_list(task_type, available, needs_vision)
 
-        first_choice = priority[0] if priority else None
+        if not priority:
+            raise RuntimeError("No valid providers in priority list.")
+
+        first_choice = priority[0]
         last_error: Exception | None = None
 
-        # Build a platform-aware system suffix that is NOT stored in history.
-        # We pass it as a separate system turn, not appended to the user message.
+        # Platform-aware system suffix (not stored in memory)
         char_limit = _PLATFORM_LIMITS.get(platform)
-        if char_limit:
-            platform_system_note = (
-                f"\n\n[PLATFORM CONSTRAINT — {platform.upper()}]: "
-                f"Keep your response under {char_limit} characters. "
-                f"Be concise. If showing code, keep it short but complete."
-            )
-        else:
-            platform_system_note = ""
+        platform_system_note = (
+            f"\n\n[PLATFORM CONSTRAINT — {platform.upper()}]: "
+            f"Keep your response under {char_limit} characters. "
+            f"Be concise. If showing code, keep it short but complete."
+            if char_limit else ""
+        )
 
         for i, provider in enumerate(priority):
             agent = self._agents[provider]
             is_fallback = (i > 0)
 
+            # Determine if this specific provider can handle vision
+            provider_caps = _PROVIDER_CAPS.get(provider, set())
+            effective_vision = needs_vision and bool(provider_caps & _VISION_CAPABLE)
+
             log.info(
-                "Trying provider=%s fallback=%s (%d/%d)",
-                provider.value, is_fallback, i + 1, len(priority),
+                "Trying provider=%s task=%s vision=%s (%d/%d)%s",
+                provider.value, task_type.value, effective_vision,
+                i + 1, len(priority),
+                " [FALLBACK]" if is_fallback else "",
             )
 
             try:
@@ -409,22 +587,27 @@ class ModelRouter:
                     platform=platform,
                     task_type=task_type,
                     platform_system_note=platform_system_note,
+                    needs_vision=effective_vision,
+                    image_data=image_data if effective_vision else None,
+                    image_mime=image_mime,
                 )
                 self._record_success(provider)
 
-                if is_fallback and first_choice:
+                if is_fallback:
                     response.fallback_used = True
                     response.fallback_from = first_choice
 
+                response.has_media = has_media
+
                 log.info(
-                    "Success | provider=%s model=%s fallback=%s tokens≈%d",
+                    "✓ Success | provider=%s model=%s task=%s fallback=%s tokens≈%d",
                     provider.value, response.model_name,
-                    response.fallback_used, response.tokens_used,
+                    task_type.value, response.fallback_used, response.tokens_used,
                 )
                 return response
 
             except Exception as exc:
-                log.error("Provider %s failed: %s", provider.value, exc)
+                log.error("✗ Provider %s failed: %s", provider.value, exc)
                 self._record_failure(provider)
                 last_error = exc
                 continue
@@ -437,7 +620,6 @@ class ModelRouter:
     # ── Memory management ─────────────────────────────────────────────────────
 
     async def clear_all_memory(self, session_id: str) -> None:
-        """Clear memory for a session across ALL providers."""
         for provider, agent in self._agents.items():
             try:
                 await agent.clear_memory(session_id)
@@ -447,17 +629,19 @@ class ModelRouter:
     # ── Status reporting ──────────────────────────────────────────────────────
 
     async def get_health_report_async(self) -> dict:
-        """Return live health status of all providers."""
+        """Return live health status of all providers including capabilities."""
         report = {}
         for provider, health in self._health.items():
-            agent = self._agents[provider]
-            configured = await agent.is_available()
+            configured = self._cached_available.get(provider, False)
             currently_healthy = self._is_healthy(provider) and configured
+            caps = sorted(_PROVIDER_CAPS.get(provider, set()))
             report[provider.value] = {
-                "configured":            configured,
-                "healthy":               currently_healthy,
-                "consecutive_failures":  health.failures,
-                "failure_threshold":     self._settings.model_failure_threshold,
+                "configured":           configured,
+                "healthy":              currently_healthy,
+                "consecutive_failures": health.failures,
+                "failure_threshold":    self._settings.model_failure_threshold,
+                "capabilities":         caps,
+                "has_vision":           bool(_PROVIDER_CAPS.get(provider, set()) & _VISION_CAPABLE),
             }
         return report
 
@@ -465,9 +649,21 @@ class ModelRouter:
         """Return list of configured free/budget providers."""
         free = []
         for p in [ModelProvider.GROQ, ModelProvider.OPENROUTER, ModelProvider.OLLAMA]:
-            if await self._agents[p].is_available():
+            if self._cached_available.get(p, False):
                 free.append(p.value)
         return free
+
+    def get_ollama_vision_model(self) -> Optional[str]:
+        """Return name of installed Ollama vision model, if any."""
+        agent = self._agents.get(ModelProvider.OLLAMA)
+        if agent and hasattr(agent, "get_vision_model"):
+            return agent.get_vision_model()
+        return None
+
+    async def refresh_provider_cache(self) -> None:
+        """Re-probe all providers (useful after config changes)."""
+        self._boot_probe_done = False
+        await self.probe_all_providers()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

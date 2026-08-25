@@ -1,0 +1,28 @@
+# Python runtime artifacts — never needed in the image
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Development / editor artifacts
+.git/
+.gitignore
+.env.example
+.vscode/
+.idea/
+
+# Local data & logs — container has its own persistent volumes
+data/
+logs/
+reports/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
