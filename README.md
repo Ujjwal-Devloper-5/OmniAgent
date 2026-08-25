@@ -7,11 +7,10 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg?style=for-the-badge)](https://www.python.org/downloads/)
 [![Docker Ready](https://img.shields.io/badge/docker-ready-blue.svg?style=for-the-badge)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-[![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg?style=for-the-badge)](#)
 
-OmniAgent is a production-grade AI assistant featuring **zero-latency model routing**, **native multimodal vision**, and a **persistent bulletproof Docker sandbox**.
+OmniAgent is a production-grade, open-source AI assistant featuring **dynamic model routing**, **native multimodal vision**, **MCP support**, and a **persistent bulletproof Docker sandbox**.
 
-[Features](#-enterprise-features) • [Architecture](#%EF%B8%8F-system-architecture) • [Quickstart](#-quickstart) • [Contributing](#-contributing)
+[Features](#-enterprise-features) • [Architecture](#%EF%B8%8F-system-architecture) • [OpenRouter Prober](#-openrouter-free-tier-auto-prober) • [MCP Guide](#-extending-with-mcp) • [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -20,48 +19,85 @@ OmniAgent is a production-grade AI assistant featuring **zero-latency model rout
 ## ✨ Enterprise Features
 
 ### 🧠 Smart Multi-Provider Routing
-Zero-latency heuristics instantly route requests to the most capable AI model for the task.
-* **Speed:** Routes to **Groq** LPUs for instant quick replies.
-* **Complex Logic & Math:** Routes to **Gemini 2.5 Pro** or **OpenAI**.
-* **Local Fallback:** Auto-routes to **Ollama** (e.g., `qwen2.5-coder`) if cloud providers are offline.
+Zero-latency heuristics instantly route requests to the most capable AI model for the task based on your configured fallback chain.
+* **High-Tier (Complex/Math):** Routes to top-tier commercial or local models.
+* **Fast-Tier (Chat/Quick):** Routes to high-speed LPU/inference providers.
+* **Local Fallback:** Auto-routes to local offline engines (e.g., Ollama) if cloud providers fail or rate-limit.
 
 ### 👁️ True Native Multimodal Vision
-OmniAgent doesn't just read URLs—it natively intercepts Discord/Telegram media, buffers the raw bytes, and streams pixel data directly to Vision SDKs (like `google-generativeai`) for flawless, high-fidelity image analysis.
+OmniAgent intercepts Discord/Telegram media, buffers the raw bytes, and streams pixel data directly to native Vision SDKs for flawless, high-fidelity image analysis (bypassing simple URL-text scraping).
 
 ### 💾 Cross-Model Unified Memory
-Powered by LangGraph and `aiosqlite`, OmniAgent maintains a continuous thread of context. You can start a conversation with *Gemini*, switch to *Claude*, and finish with *DeepSeek*—without ever losing context.
+Powered by LangGraph and `aiosqlite`, OmniAgent maintains a continuous thread of context. You can start a conversation with one model provider, hit a rate limit, and seamlessly finish with another—without ever losing conversation context.
 
 ### 🛡️ Bulletproof Execution Sandbox
-Every agent gets access to a deeply isolated, ephemeral Linux Docker container to write scripts, install `pip` packages, and execute code with strict CPU/RAM/PID resource quotas and persistent user workspaces.
+Every agent action has access to a deeply isolated, ephemeral Linux Docker container to write scripts, install `pip` packages, and execute code with strict CPU/RAM/PID resource quotas and a persistent user workspace.
 
-### 🔌 Model Context Protocol (MCP) Ready
-Native support for extending your agent's capabilities dynamically. Connect external MCP servers (Google Drive, GitHub, local filesystems) without touching a single line of core code.
-
-### ⚡ Zero-Downtime OpenRouter Daemon
-A background prober fetches and validates OpenRouter's 200+ free models every 12 hours. Dead or rate-limited models are aggressively pruned from the routing pool, eliminating `404/429` cascades.
-
-### 👤 UjjwalBrain (Continuous Profiling)
-A dedicated background task constantly analyzes interactions to build a persistent profile of the owner's tech stack, projects, and preferences, seamlessly injecting this context into the system prompt.
+### 👤 Cognitive Profiling (Background Brain)
+A dedicated background daemon constantly analyzes user interactions to build a persistent, privacy-focused profile of the user's tech stack, projects, and preferences, continuously injecting this context into the system prompt.
 
 ---
 
 ## 🏗️ System Architecture
 
+Our robust multi-agent architecture is completely provider-agnostic, allowing you to plug in any LLM ecosystem effortlessly.
+
 ```mermaid
 graph TD
     User((User)) <--> |Messages & Images| Gateway[Discord / Telegram Gateways]
-    Gateway <--> Router{Smart Model Router}
+    Gateway <--> Core[LangGraph AI Engine]
     
-    Router -->|Creative / 200+ Models| OR[OpenRouter API]
-    Router -->|Complex / Vision| Gem[Google Gemini 2.5]
-    Router -->|Offline / Local Vision| Ollama[Ollama Local Engine]
-    Router -->|Lightning Fast| Groq[Groq LPU]
+    Core <--> Router{Dynamic Model Router}
     
-    Gem <--> Graph[LangGraph Tool Engine]
-    Graph <--> Sandbox[(Docker Sandbox)]
-    Graph <--> MCP[MCP Servers]
-    Graph <--> Mem[(Unified SQLite Memory)]
+    Router -->|Complex Logic| HighTier[High-Tier Cloud/Local]
+    Router -->|Lightning Fast| FastTier[Speed-Optimized Endpoints]
+    Router -->|Cost-Free / Rotated| OR[OpenRouter Free Tier]
+    Router -->|Offline / Privacy| Local[Local API e.g. Ollama]
+    
+    Core <--> Sandbox[(Isolated Docker Sandbox)]
+    Core <--> MCP[External MCP Servers]
+    Core <--> Mem[(Unified SQLite Memory)]
+    Core <--> Brain[Cognitive Profiling Worker]
+    
+    Sandbox --> Tools[Web, FS, Computing Tools]
 ```
+
+---
+
+## ⚡ OpenRouter Free Tier Auto-Prober
+
+If you are leveraging **OpenRouter's free API tier**, you know that free models frequently go offline or hit 429 rate limits, causing annoying cascading failures.
+
+OmniAgent solves this with a **Zero-Downtime Daemon**:
+1. **Discovery:** Runs in the background (every 12 hours) and queries the OpenRouter `/models` endpoint to discover every currently available free model.
+2. **Validation:** Sends a minimal 1-token probe request to each model.
+3. **Hot-Swapping:** Aggressively prunes dead, removed, or rate-limited models from the active routing pool in memory.
+4. **Result:** Your bot *never* attempts to query a dead free model, eliminating runtime wait times and errors.
+
+---
+
+## 🔌 Extending with MCP (Model Context Protocol)
+
+OmniAgent natively supports the **Model Context Protocol (MCP)**, allowing you to attach external servers (like Google Drive, GitHub, or local filesystems) to grant the AI new capabilities without modifying core code.
+
+### How to use MCP:
+1. Open your `.env` file.
+2. Define your MCP servers via the `MCP_SERVERS` JSON block.
+
+```env
+# Example MCP Configuration
+MCP_SERVERS='{
+  "github": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"]
+  },
+  "sqlite": {
+    "command": "uvx",
+    "args": ["mcp-server-sqlite", "--db-path", "/path/to/database.db"]
+  }
+}'
+```
+3. Restart OmniAgent. The agent will automatically connect to the servers on boot, dynamically extract their tools, and add them to the AI's internal tool registry!
 
 ---
 
@@ -70,61 +106,38 @@ graph TD
 ### 1. Prerequisites
 * **Python 3.12+** or **Docker**
 * `uv` package manager (recommended for blazing fast builds)
-* Platform Tokens (Discord/Telegram) and at least one LLM API Key.
+* Platform Tokens (Discord/Telegram) and at least one LLM API Key (OpenAI, Anthropic, Gemini, Groq, OpenRouter, or Ollama URL).
 
 ### 2. Configuration
 ```bash
-git clone https://github.com/Ujjwal-Developer-5/OmniAgent.git
+git clone https://github.com/your-repo/OmniAgent.git
 cd OmniAgent
 cp .env.example .env
-# Edit .env with your keys
+# Edit .env with your chosen API keys
 ```
 
 ### 3. Deploy (Docker - Recommended)
-OmniAgent uses a multi-stage, `uv`-powered Docker build for sub-second dependency resolution.
+OmniAgent uses a highly optimized, multi-stage `uv`-powered Docker build.
 ```bash
 DOCKER_BUILDKIT=1 docker-compose up -d --build
 docker-compose logs -f omniagent
 ```
 
-### 4. Local Development
-```bash
-uv sync
-uv run python main.py
-```
-
 ---
 
-## 🧰 Built-in Toolset
-The agent is equipped with a runtime-injected, context-aware tool registry:
-* **Execution:** `run_sandbox_command`, `execute_python`
-* **Filesystem:** `read_file`, `write_file`, `list_files`, `write_sandbox_file`
-* **Memory:** `remember_note`, `recall_notes`
-* **Utilities:** `web_search`, `calculate`, `get_weather`, `get_current_datetime`, `fetch_url`
+## 🧰 Built-in Toolset Ecosystem
+Out of the box, OmniAgent features a context-aware tool registry:
+* **Sandbox Computing:** `run_sandbox_command`, `execute_python`
+* **Persistent Filesystem:** `read_file`, `write_file`, `list_files`, `write_sandbox_file`
+* **Long-term Memory:** `remember_note`, `recall_notes`
+* **Web & Utilities:** `web_search`, `calculate`, `get_weather`, `get_current_datetime`, `fetch_url`
 
 ---
 
 ## 🤝 Contributing
 
-We welcome contributions from the community! OmniAgent is built to be modular and highly extensible.
-
-### How to Contribute
-1. **Fork** the repository
-2. **Create a branch:** `git checkout -b feature/AmazingFeature`
-3. **Commit changes:** `git commit -m 'Add some AmazingFeature'`
-4. **Push:** `git push origin feature/AmazingFeature`
-5. **Open a Pull Request**
-
-### Contributors & Core Team
-* **Ujjwal Kumar** - *Founder & Lead Architect* - [@Ujjwal-Developer-5](https://github.com/Ujjwal-Developer-5)
-
-<a href="https://github.com/Ujjwal-Developer-5/OmniAgent/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Ujjwal-Developer-5/OmniAgent" alt="Contributors" />
-</a>
-
----
+We welcome contributions from the community! Whether you are adding new tool endpoints, improving the LangGraph state machine, or fixing bugs, check out our [Contributing Guide](CONTRIBUTING.md) to get started.
 
 <div align="center">
-  Made with ❤️ by Ujjwal Kumar and Contributors.<br>
   Released under the <b>MIT License</b>.
 </div>
