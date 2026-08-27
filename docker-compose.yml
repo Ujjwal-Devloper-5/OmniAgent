@@ -12,6 +12,12 @@ services:
     container_name: omniagent
     restart: unless-stopped
 
+    # Required for Puppeteer / Chromium to launch headlessly inside Docker
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
+
     env_file:
       - .env
 

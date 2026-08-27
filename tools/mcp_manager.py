@@ -59,7 +59,7 @@ class MCPManager:
                 return None
             args_raw = os.getenv(f"{prefix}ARGS", "").strip()
             args = [a.strip() for a in args_raw.split(",") if a.strip()] if args_raw else []
-            return {"transport": "stdio", "command": command, "args": args}
+            return {"transport": "stdio", "command": command, "args": args, "env": dict(os.environ)}
         elif transport in ("http", "sse", "streamable_http"):
             url = os.getenv(f"{prefix}URL", "").strip()
             return {"transport": "streamable_http", "url": url} if url else None

@@ -19,6 +19,7 @@ from core.agent import clear_memory, get_status, get_task_classification, proces
 from core.helpers import split_message
 from core.logger import get_logger
 from core.rate_limiter import get_rate_limiter
+from core.stream_renderer import StreamRenderer
 
 log = get_logger(__name__)
 
@@ -442,16 +443,20 @@ class OmniAgentDiscord(commands.Bot):
             return
 
         try:
-            async with channel.typing():
-                response = await process_message(
-                    session_id,
-                    content,
-                    platform="discord",
-                    force_provider=force_provider,
-                    has_media=has_media,
-                    image_data=image_data,
-                    image_mime=image_mime,
-                )
+            renderer = None
+            if not interaction:
+                renderer = StreamRenderer(channel, reply_to=reply_to)
+                await renderer.start()
+
+            response = await process_message(
+                session_id,
+                content,
+                platform="discord",
+                force_provider=force_provider,
+                has_media=has_media,
+                image_data=image_data,
+                image_mime=image_mime,
+            )
 
             self._messages_processed += 1
             await rate_limiter.record_tokens(f"discord_{user_id}", len(response) // 4)
@@ -468,23 +473,25 @@ class OmniAgentDiscord(commands.Bot):
             except Exception:
                 pass  # Non-fatal
 
-            chunks = split_message(response, max_length=1950)
-            for i, chunk in enumerate(chunks):
-                if i == 0 and reply_to:
-                    await reply_to.reply(chunk)
-                elif interaction:
+            if interaction:
+                chunks = split_message(response, max_length=1950)
+                for chunk in chunks:
                     await interaction.followup.send(chunk)
-                elif reply_to:
-                    await reply_to.channel.send(chunk)
+            elif renderer:
+                await renderer.finish(response, split_func=split_message)
 
         except discord.Forbidden:
             log.error("Missing permissions in channel %s", channel)
+            if renderer:
+                await renderer.error("⚠️ Missing permissions to send messages here.")
         except Exception as exc:
             log.error("Discord AI handler error: %s", exc, exc_info=True)
             err_msg = f"⚠️ Something went wrong: `{type(exc).__name__}`. Please try again."
             try:
                 if interaction:
                     await interaction.followup.send(err_msg, ephemeral=True)
+                elif renderer:
+                    await renderer.error(err_msg)
                 elif reply_to:
                     await reply_to.reply(err_msg)
             except Exception:

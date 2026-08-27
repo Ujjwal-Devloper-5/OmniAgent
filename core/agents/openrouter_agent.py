@@ -132,6 +132,11 @@ class OpenRouterAgent(BaseAgent):
 
         last_error: Exception | None = None
 
+        from core.context_manager import maybe_trim_context
+        context_summary = await maybe_trim_context(session_id, settings.db_path)
+        if context_summary:
+            message = context_summary + "\n\n" + message
+
         for model_name in candidates:
             llm = self._make_llm(model_name)
             log.info("OpenRouter | task=%s model=%s session=%s", task_type.value, model_name, session_id)
@@ -161,6 +166,14 @@ class OpenRouterAgent(BaseAgent):
                 return await _call()
             except Exception as exc:
                 err_str = str(exc)
+                
+                if self._is_corrupt_checkpoint_error(exc):
+                    await self._heal_corrupt_checkpoint(session_id, settings.db_path)
+                    try:
+                        return await _call()
+                    except Exception as heal_exc:
+                        raise heal_exc
+                        
                 is_skip_error = any(x in err_str.lower() for x in [
                     "429", "rate", "rate-limited", "404", "unavailable", "not found"
                 ])

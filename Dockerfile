@@ -51,10 +51,26 @@ RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends docker-ce-cli && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Install Node.js, npm, and Chromium (for MCP servers: Puppeteer, Memory, FileSystem)
+RUN apt-get update -qq && \
+    apt-get install -y -qq --no-install-recommends \
+        nodejs npm chromium fonts-liberation fonts-noto-color-emoji \
+        libxss1 libx11-xcb1 libxcomposite1 libxcursor1 libxdamage1 \
+        libxi6 libxtst6 libnss3 libcups2 libxrandr2 libasound2 \
+        libatk1.0-0 libgtk-3-0 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    mv /usr/bin/chromium /usr/bin/chromium-orig && \
+    echo '#!/bin/sh\nexec /usr/bin/chromium-orig --no-sandbox --disable-setuid-sandbox --headless --disable-gpu "$@"' > /usr/bin/chromium && \
+    chmod +x /usr/bin/chromium
+
+# Configure Puppeteer to use the OS-installed Chromium
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
 # Security: run as non-root, but in docker group for sandbox socket access
 RUN groupadd --gid 1001 omniagent && \
     useradd --uid 1001 --gid omniagent --shell /bin/bash --create-home omniagent && \
-    groupadd --gid 999 docker 2>/dev/null || true && \
+    getent group docker || groupadd docker && \
     usermod -aG docker omniagent
 
 # Copy uv binary

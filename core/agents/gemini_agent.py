@@ -92,6 +92,7 @@ class GeminiAgent(BaseAgent):
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         from langgraph.prebuilt import create_react_agent
         from tools.registry import get_tools
+        from core.context_manager import maybe_trim_context
 
         model_name = self._pick_model(task_type)
         llm = ChatGoogleGenerativeAI(
@@ -102,6 +103,10 @@ class GeminiAgent(BaseAgent):
         )
         tools = get_tools()
         effective_prompt = build_system_prompt(platform_system_note)
+
+        context_summary = await maybe_trim_context(session_id, settings.db_path)
+        if context_summary:
+            message = context_summary + "\n\n" + message
 
         async def _call() -> AgentResponse:
             async with AsyncSqliteSaver.from_conn_string(settings.db_path) as checkpointer:

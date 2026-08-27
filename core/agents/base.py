@@ -194,6 +194,48 @@ class BaseAgent(ABC):
                     pass
             await conn.commit()
 
+    @staticmethod
+    def _is_corrupt_checkpoint_error(exc: Exception) -> bool:
+        err_str = str(exc)
+        return any(
+            x in err_str for x in [
+                "INVALID_CHAT_HISTORY",
+                "tool_calls that do not have a corresponding ToolMessage",
+                "AIMessages with tool_calls",
+                "ToolMessage",
+            ]
+        )
+
+    async def _heal_corrupt_checkpoint(self, session_id: str, db_path: str) -> None:
+        import aiosqlite
+        from config import settings
+        from core.logger import get_logger
+        log = get_logger(__name__)
+
+        try:
+            async with aiosqlite.connect(db_path) as conn:
+                await conn.execute("PRAGMA journal_mode=WAL;")
+                cursor = await conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = {row[0] for row in await cursor.fetchall()}
+                
+                for table in ("checkpoints", "writes", "checkpoint_writes", "checkpoint_blobs"):
+                    if table in tables:
+                        try:
+                            await conn.execute(f"DELETE FROM {table} WHERE thread_id LIKE ?", (f"{session_id}%",))
+                        except Exception as e:
+                            log.warning("Failed to heal table %s: %s", table, e)
+                            
+                if "unified_memory" in tables:
+                    try:
+                        await conn.execute("DELETE FROM unified_memory WHERE session_id = ?", (session_id,))
+                    except Exception as e:
+                        log.warning("Failed to heal unified_memory: %s", e)
+                        
+                await conn.commit()
+                log.info(f"Auto-healed corrupt checkpoint for session={session_id}")
+        except Exception as exc:
+            log.warning("Failed to heal corrupt checkpoint: %s", exc)
+
     async def _retry(
         self,
         coro_factory,
@@ -204,12 +246,27 @@ class BaseAgent(ABC):
         Shared retry loop with exponential backoff.
         `coro_factory` is a callable that returns a new coroutine each time.
         """
+        from config import settings
         last_exc: Exception | None = None
+        _healed = False
+        
         for attempt in range(1, max_retries + 1):
             try:
                 return await coro_factory()
             except Exception as exc:
                 last_exc = exc
+                
+                if self._is_corrupt_checkpoint_error(exc):
+                    if not _healed:
+                        await self._heal_corrupt_checkpoint(session_id, settings.db_path)
+                        _healed = True
+                        try:
+                            return await coro_factory()
+                        except Exception as heal_exc:
+                            raise heal_exc
+                    else:
+                        raise exc
+                        
                 if attempt < max_retries:
                     await asyncio.sleep(1.5 * attempt)
         raise RuntimeError(
