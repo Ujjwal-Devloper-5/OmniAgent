@@ -251,7 +251,7 @@ class _SandboxPool:
             except Exception:
                 pass  # Non-fatal — user can always run apt-get update manually
 
-        asyncio.create_task(_prewarm())
+        await _prewarm()
         return container_id
 
     async def get_or_create(self, session_key: str) -> str:
@@ -474,7 +474,7 @@ async def run_sandbox_command(command: str, session_id: str = "default") -> str:
     Execute a shell command inside a fully isolated Docker sandbox container.
 
     The sandbox provides:
-    - A fresh Linux (Debian-slim) environment
+    - A fully-equipped Ubuntu 24.04 environment (python3, pip, curl, git pre-installed)
     - Full internet access (for pip install, curl, wget, etc.)
     - Python 3.12, bash, curl, wget, git, jq, pip pre-installed
     - Popular Python packages: requests, httpx, pandas, numpy, rich
