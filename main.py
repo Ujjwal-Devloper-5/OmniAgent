@@ -82,6 +82,12 @@ async def _run_bots() -> None:
     else:
         log.warning("Telegram bot disabled (no TELEGRAM_TOKEN)")
 
+    from adapters.slack_bot import start_slack
+    if settings.slack_bot_token and settings.slack_app_token:
+        tasks.append(asyncio.create_task(start_slack(), name="slack"))
+    else:
+        log.warning("Slack bot disabled (no SLACK_BOT_TOKEN / SLACK_APP_TOKEN)")
+
     if not tasks:
         log.error("No platform tokens configured! Set DISCORD_TOKEN and/or TELEGRAM_TOKEN.")
         sys.exit(1)

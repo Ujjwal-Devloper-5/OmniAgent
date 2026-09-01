@@ -83,6 +83,11 @@ class Settings(BaseSettings):
     # ── Platform Tokens ───────────────────────────────────────────────────────
     discord_token:  Optional[str] = Field(default=None)
     telegram_token: Optional[str] = Field(default=None)
+    
+    # ── Slack ──────────────────────────────────────────────────────────────────────
+    slack_bot_token: Optional[str] = Field(default=None)   # xoxb-...
+    slack_app_token: Optional[str] = Field(default=None)   # xapp-... (for Socket Mode)
+    slack_signing_secret: Optional[str] = Field(default=None)
 
     # ── Database ──────────────────────────────────────────────────────────────
     db_path: str = Field(default="data/memory.sqlite")

@@ -37,6 +37,7 @@ services:
     volumes:
       # ─── Source code mount ───────────────────────────────────────────────────
       # Mount the project source read-only so code changes are instant —
+      # Mount the project source read-only so code changes are instant —
       # no rebuild needed, just `docker compose restart`.
       - .:/app:ro
       # Keep the baked .venv writable (uv needs to write .lock files)
