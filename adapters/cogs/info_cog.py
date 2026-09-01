@@ -142,6 +142,24 @@ class InfoCog(commands.Cog):
             ),
             inline=False,
         )
+
+        # ── Dynamic model pool from ModelRegistry ──────────────────────────────
+        try:
+            from core.model_registry import get_registry
+            reg = get_registry()
+            if reg.available_count > 0:
+                summary = reg.get_registry_summary()
+                # Discord field values are capped at 1024 characters
+                if len(summary) > 1020:
+                    summary = summary[:1020] + "…"
+                embed.add_field(
+                    name=f"🧠 Model Pool ({reg.available_count}/{reg.total_models} available)",
+                    value=summary,
+                    inline=False,
+                )
+        except Exception:
+            pass  # Registry not yet initialised — silently skip
+
         embed.set_footer(text="Created by Ujjwal Kumar • OmniAgent v3.1")
         await interaction.followup.send(embed=embed, ephemeral=True)
 

@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING, Optional
 
 from core.agents.base import AgentResponse, ModelProvider, TaskType
 from core.logger import get_logger
+from core.model_registry import get_registry
 
 if TYPE_CHECKING:
     from core.agents.base import BaseAgent
@@ -376,6 +377,23 @@ class ModelRouter:
 
             self._boot_probe_done = True
 
+            # ── Initialise the dynamic model registry ─────────────────────────
+            # Build the set of provider names that are actually configured.
+            available_provider_names: set[str] = {
+                provider.value for provider, avail in results if avail
+            }
+            try:
+                registry = get_registry()
+                await registry.initialize(available_provider_names)
+
+                # Feed Ollama's installed model list so unregistered models
+                # get auto-registered with conservative default scores.
+                if ollama_agent and hasattr(ollama_agent, "_model_capabilities"):
+                    installed_names = list(ollama_agent._model_capabilities.keys())
+                    await registry.add_ollama_models(installed_names)
+            except Exception as reg_exc:
+                log.warning("ModelRegistry init failed (non-fatal): %s", reg_exc)
+
             # Log the effective routing for this setup
             vision_providers = [
                 p.value for p in ModelProvider
@@ -472,6 +490,84 @@ class ModelRouter:
 
         return ordered
 
+    def _select_best_model_for_task(
+        self,
+        task_type: TaskType,
+        available: list[ModelProvider],
+        needs_vision: bool = False,
+        needs_tools: bool = False,
+    ) -> list[ModelProvider]:
+        """
+        Build an ordered provider list using the dynamic ModelRegistry.
+
+        Queries the registry for all eligible models scored by
+        intelligence/speed/tool_reliability, then maps each model's provider
+        to the agents dict.  Models from unavailable providers are skipped.
+
+        Falls back to ``_build_priority_list`` (legacy _TASK_PREFERENCES) if
+        the registry returns no candidates — so the system degrades gracefully
+        even if models.json is missing or empty.
+
+        Parameters
+        ----------
+        task_type    : Classified task (CODING, MATH, VISION, etc.)
+        available    : Providers confirmed available at boot probe.
+        needs_vision : Whether the request includes media / requires vision.
+        needs_tools  : Whether tool-calling reliability should be weighted.
+        """
+        try:
+            registry = get_registry()
+            ranked = registry.get_ranked_list(
+                task_type=task_type.value,
+                needs_vision=needs_vision,
+                needs_tools=needs_tools,
+            )
+        except Exception as exc:
+            log.warning(
+                "_select_best_model_for_task: registry error (%s) — using legacy list",
+                exc,
+            )
+            return self._build_priority_list(task_type, available, needs_vision)
+
+        if not ranked:
+            log.debug(
+                "_select_best_model_for_task: registry empty for task=%s — using legacy list",
+                task_type.value,
+            )
+            return self._build_priority_list(task_type, available, needs_vision)
+
+        # Map scored models → provider enum, deduplicate, skip unavailable
+        seen: set[ModelProvider] = set()
+        ordered: list[ModelProvider] = []
+        for model_entry in ranked:
+            try:
+                provider = ModelProvider(model_entry.provider)
+            except ValueError:
+                continue  # Unknown provider in registry entry — skip
+            if provider not in available or provider in seen:
+                continue
+            seen.add(provider)
+            ordered.append(provider)
+
+        if not ordered:
+            # All registry-recommended providers are unavailable right now
+            log.debug(
+                "_select_best_model_for_task: all registry providers unavailable — using legacy list",
+            )
+            return self._build_priority_list(task_type, available, needs_vision)
+
+        # Append any remaining available providers not yet in list (full fallback chain)
+        for p in self._build_priority_list(task_type, available, needs_vision):
+            if p not in seen:
+                ordered.append(p)
+
+        log.debug(
+            "_select_best_model_for_task | task=%s → %s",
+            task_type.value,
+            [p.value for p in ordered],
+        )
+        return ordered
+
     # ── Main routing entry point ───────────────────────────────────────────────
 
     async def route(
@@ -538,7 +634,9 @@ class ModelRouter:
         if force_provider:
             if force_provider in available:
                 priority = [force_provider]
-                for p in self._build_priority_list(task_type, available, needs_vision):
+                for p in self._select_best_model_for_task(
+                    task_type, available, needs_vision, needs_tools=True
+                ):
                     if p not in priority:
                         priority.append(p)
             else:
@@ -546,9 +644,14 @@ class ModelRouter:
                     "Forced provider %s not available, using auto-routing",
                     force_provider.value,
                 )
-                priority = self._build_priority_list(task_type, available, needs_vision)
+                priority = self._select_best_model_for_task(
+                    task_type, available, needs_vision, needs_tools=True
+                )
         else:
-            priority = self._build_priority_list(task_type, available, needs_vision)
+            # Registry-first: scored dynamic pool, falls back to _TASK_PREFERENCES
+            priority = self._select_best_model_for_task(
+                task_type, available, needs_vision, needs_tools=True
+            )
 
         if not priority:
             raise RuntimeError("No valid providers in priority list.")
@@ -592,6 +695,11 @@ class ModelRouter:
                     image_mime=image_mime,
                 )
                 self._record_success(provider)
+                # Inform registry of success so it can reset health demotions
+                try:
+                    get_registry().record_success(response.model_name)
+                except Exception:
+                    pass
 
                 if is_fallback:
                     response.fallback_used = True
@@ -609,6 +717,17 @@ class ModelRouter:
             except Exception as exc:
                 log.error("✗ Provider %s failed: %s", provider.value, exc)
                 self._record_failure(provider)
+                # Inform registry so it can score-demote the specific model
+                try:
+                    # Best effort: find the model_id for this provider from registry
+                    reg = get_registry()
+                    ranked = reg.get_ranked_list(task_type.value, needs_vision, True)
+                    for m in ranked:
+                        if m.provider == provider.value:
+                            reg.record_failure(m.id)
+                            break
+                except Exception:
+                    pass
                 last_error = exc
                 continue
 

@@ -1,0 +1,175 @@
+{
+  "_comment": "OmniAgent Model Registry — JSON format (PyYAML not installed). Each model: provider, intelligence (1-10), speed (1-10), tool_reliability (1-10), vision (bool), context_window, tags.",
+  "models": [
+    {
+      "id": "gemini-2.5-flash",
+      "provider": "gemini",
+      "intelligence": 8,
+      "speed": 9,
+      "tool_reliability": 9,
+      "vision": true,
+      "context_window": 1000000,
+      "tags": ["coding", "math", "research", "analysis", "vision", "general", "quick"]
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "provider": "gemini",
+      "intelligence": 10,
+      "speed": 5,
+      "tool_reliability": 9,
+      "vision": true,
+      "context_window": 2000000,
+      "tags": ["coding", "math", "research", "analysis", "vision", "creative", "general"]
+    },
+    {
+      "id": "claude-sonnet-4-5",
+      "provider": "anthropic",
+      "intelligence": 9,
+      "speed": 7,
+      "tool_reliability": 10,
+      "vision": true,
+      "context_window": 200000,
+      "tags": ["coding", "creative", "analysis", "research", "vision", "general"]
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "provider": "anthropic",
+      "intelligence": 7,
+      "speed": 10,
+      "tool_reliability": 9,
+      "vision": true,
+      "context_window": 200000,
+      "tags": ["quick", "general", "creative"]
+    },
+    {
+      "id": "gpt-4o",
+      "provider": "openai",
+      "intelligence": 9,
+      "speed": 7,
+      "tool_reliability": 10,
+      "vision": true,
+      "context_window": 128000,
+      "tags": ["coding", "math", "analysis", "research", "vision", "general"]
+    },
+    {
+      "id": "gpt-4o-mini",
+      "provider": "openai",
+      "intelligence": 7,
+      "speed": 10,
+      "tool_reliability": 9,
+      "vision": true,
+      "context_window": 128000,
+      "tags": ["quick", "general", "coding"]
+    },
+    {
+      "id": "llama-3.3-70b-versatile",
+      "provider": "groq",
+      "intelligence": 8,
+      "speed": 10,
+      "tool_reliability": 7,
+      "vision": false,
+      "context_window": 128000,
+      "tags": ["general", "research", "coding", "quick"]
+    },
+    {
+      "id": "qwen-qwq-32b",
+      "provider": "groq",
+      "intelligence": 9,
+      "speed": 9,
+      "tool_reliability": 7,
+      "vision": false,
+      "context_window": 128000,
+      "tags": ["math", "coding", "analysis", "research"]
+    },
+    {
+      "id": "cohere/command-r-plus",
+      "provider": "openrouter",
+      "intelligence": 7,
+      "speed": 7,
+      "tool_reliability": 6,
+      "vision": false,
+      "context_window": 128000,
+      "tags": ["general", "research", "creative"]
+    },
+    {
+      "id": "meta-llama/llama-3.1-8b-instruct:free",
+      "provider": "openrouter",
+      "intelligence": 4,
+      "speed": 9,
+      "tool_reliability": 3,
+      "vision": false,
+      "context_window": 128000,
+      "tags": ["quick", "general"]
+    },
+    {
+      "id": "qwen2.5-coder:7b",
+      "provider": "ollama",
+      "intelligence": 7,
+      "speed": 8,
+      "tool_reliability": 6,
+      "vision": false,
+      "context_window": 32000,
+      "tags": ["coding"]
+    },
+    {
+      "id": "qwen2.5vl:3b",
+      "provider": "ollama",
+      "intelligence": 5,
+      "speed": 9,
+      "tool_reliability": 4,
+      "vision": true,
+      "context_window": 32000,
+      "tags": ["vision", "quick"]
+    },
+    {
+      "id": "gemma3:12b",
+      "provider": "ollama",
+      "intelligence": 7,
+      "speed": 7,
+      "tool_reliability": 6,
+      "vision": true,
+      "context_window": 128000,
+      "tags": ["general", "vision", "coding", "research"]
+    },
+    {
+      "id": "qwen3:8b",
+      "provider": "ollama",
+      "intelligence": 5,
+      "speed": 8,
+      "tool_reliability": 3,
+      "vision": false,
+      "context_window": 32000,
+      "tags": ["quick", "general"]
+    },
+    {
+      "id": "qwen3:4b",
+      "provider": "ollama",
+      "intelligence": 4,
+      "speed": 9,
+      "tool_reliability": 2,
+      "vision": false,
+      "context_window": 32000,
+      "tags": ["quick"]
+    },
+    {
+      "id": "deepseek-r1:1.5b",
+      "provider": "ollama",
+      "intelligence": 5,
+      "speed": 10,
+      "tool_reliability": 2,
+      "vision": false,
+      "context_window": 32000,
+      "tags": ["math", "quick"]
+    },
+    {
+      "id": "llama3.2:3b",
+      "provider": "ollama",
+      "intelligence": 4,
+      "speed": 10,
+      "tool_reliability": 3,
+      "vision": false,
+      "context_window": 128000,
+      "tags": ["quick", "general"]
+    }
+  ]
+}
