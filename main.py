@@ -72,6 +72,10 @@ async def _run_bots() -> None:
 
     tasks: list[asyncio.Task] = []
 
+    # ── Admin API ────────────────────────────────────────────────────────────────
+    from adapters.admin_api import start_admin_api
+    tasks.append(asyncio.create_task(start_admin_api(), name="admin_api"))
+
     if settings.discord_token:
         tasks.append(asyncio.create_task(start_discord(), name="discord"))
     else:

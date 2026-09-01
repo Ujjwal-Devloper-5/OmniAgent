@@ -289,7 +289,7 @@ class OllamaAgent(BaseAgent):
         tools = get_tools()
 
         async def _call() -> AgentResponse:
-            effective_prompt = build_system_prompt(platform_system_note)
+            effective_prompt = await build_system_prompt(platform_system_note, session_id)
             async with AsyncSqliteSaver.from_conn_string(settings.db_path) as checkpointer:
                 agent = create_react_agent(
                     llm, tools, checkpointer=checkpointer, prompt=effective_prompt,
@@ -321,7 +321,7 @@ class OllamaAgent(BaseAgent):
         max_retries: int,
     ) -> AgentResponse:
         """Direct Ollama /api/chat call for models that don't support tool calling."""
-        system = build_system_prompt(platform_system_note)
+        system = await build_system_prompt(platform_system_note, session_id)
 
         payload = {
             "model": model_name,

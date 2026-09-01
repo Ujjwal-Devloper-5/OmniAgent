@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OmniAgent Admin Dashboard</title>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --card-bg: #161b22;
+            --text-main: #c9d1d9;
+            --text-muted: #8b949e;
+            --accent: #6C63FF;
+            --accent-hover: #5a52d5;
+            --danger: #da3633;
+            --success: #238636;
+            --border: #30363d;
+        }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        a { color: var(--accent); text-decoration: none; }
+        button {
+            background: var(--accent); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500;
+        }
+        button:hover { background: var(--accent-hover); }
+        button.danger { background: var(--danger); }
+        input, select, textarea {
+            background: var(--bg-color); color: var(--text-main); border: 1px solid var(--border); padding: 8px; border-radius: 6px; width: 100%; box-sizing: border-box;
+        }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-muted); font-weight: 500; }
+        .hidden { display: none !important; }
+        
+        /* Login Screen */
+        #login-screen {
+            position: fixed; inset: 0; background: var(--bg-color); display: flex; justify-content: center; align-items: center; z-index: 100;
+        }
+        .login-card {
+            background: var(--card-bg); padding: 32px; border-radius: 12px; border: 1px solid var(--border); width: 100%; max-width: 400px; text-align: center;
+        }
+        
+        /* Layout */
+        #sidebar {
+            width: 240px; background: var(--card-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 16px 0;
+        }
+        .nav-item {
+            padding: 12px 24px; cursor: pointer; color: var(--text-muted); font-weight: 500; display: flex; align-items: center; gap: 12px;
+        }
+        .nav-item:hover, .nav-item.active { color: var(--text-main); background: rgba(255,255,255,0.05); }
+        #main-content {
+            flex: 1; overflow-y: auto; padding: 32px;
+        }
+        
+        /* Panels */
+        .panel { display: none; }
+        .panel.active { display: block; }
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .card { background: var(--card-bg); padding: 20px; border-radius: 8px; border: 1px solid var(--border); }
+        .card h3 { margin: 0 0 8px 0; color: var(--text-muted); font-size: 14px; }
+        .card .value { font-size: 24px; font-weight: bold; }
+        
+        /* Logs */
+        #log-container {
+            background: #000; color: #a5d6ff; font-family: monospace; padding: 16px; border-radius: 8px; height: 600px; overflow-y: auto;
+        }
+        .log-INFO { color: #c9d1d9; }
+        .log-WARNING { color: #d29922; }
+        .log-ERROR { color: #f85149; }
+        .log-CRITICAL { color: #ff7b72; font-weight: bold; }
+        
+        /* Modal */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; justify-content: center; align-items: center; z-index: 50; }
+        .modal { background: var(--card-bg); padding: 24px; border-radius: 8px; width: 100%; max-width: 500px; border: 1px solid var(--border); }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; margin-bottom: 6px; color: var(--text-muted); font-size: 14px; }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
+        
+        /* Toast */
+        #toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 24px; border-radius: 6px; color: white; opacity: 0; transition: opacity 0.3s; z-index: 200; pointer-events: none; }
+        .toast-success { background: var(--success); }
+        .toast-error { background: var(--danger); }
+        
+        .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+        .status-green { background: var(--success); }
+        .status-red { background: var(--danger); }
+    </style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="login-screen">
+    <div class="login-card">
+        <h2 style="margin-top:0;">OmniAgent Admin</h2>
+        <p style="color:var(--text-muted); margin-bottom: 24px;">Enter your Admin API Secret</p>
+        <input type="password" id="secret-input" placeholder="Secret Token" style="margin-bottom: 16px;">
+        <button onclick="login()" style="width: 100%;">Login</button>
+    </div>
+</div>
+
+<!-- App -->
+<div id="sidebar" class="hidden">
+    <div style="padding: 0 24px 24px 24px; font-weight: bold; font-size: 18px; color: white;">OmniAgent</div>
+    <div class="nav-item active" onclick="nav('overview')">📊 Overview</div>
+    <div class="nav-item" onclick="nav('models')">🤖 Models</div>
+    <div class="nav-item" onclick="nav('users')">👥 Users</div>
+    <div class="nav-item" onclick="nav('sessions')">💬 Sessions</div>
+    <div class="nav-item" onclick="nav('logs')">📋 Live Logs</div>
+    <div class="nav-item" onclick="nav('config')">⚙️ Config</div>
+    <div style="flex: 1;"></div>
+    <div class="nav-item" onclick="rebootSystem()" style="color: var(--danger);">🔄 Reboot Bot</div>
+    <div class="nav-item" onclick="logout()">🚪 Logout</div>
+</div>
+
+<div id="main-content" class="hidden">
+    <!-- Overview -->
+    <div id="panel-overview" class="panel active">
+        <h2>System Overview</h2>
+        <div class="card-grid">
+            <div class="card">
+                <h3>Active Sessions</h3>
+                <div class="value" id="stat-sessions">-</div>
+            </div>
+            <div class="card">
+                <h3>Total Models</h3>
+                <div class="value" id="stat-models">-</div>
+            </div>
+            <div class="card">
+                <h3>Providers Status</h3>
+                <div class="value" id="stat-providers" style="font-size:16px; margin-top:8px;">-</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Models -->
+    <div id="panel-models" class="panel">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2>Model Registry</h2>
+            <button onclick="openModelModal()">+ Add Model</button>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Provider</th>
+                    <th>Int</th>
+                    <th>Spd</th>
+                    <th>Tool</th>
+                    <th>Vis</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="models-tbody"></tbody>
+        </table>
+    </div>
+
+    <!-- Users -->
+    <div id="panel-users" class="panel">
+        <h2>Users</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>User ID</th>
+                    <th>System Prompt</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="users-tbody"></tbody>
+        </table>
+    </div>
+
+    <!-- Sessions -->
+    <div id="panel-sessions" class="panel">
+        <h2>Active Sessions</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Session ID</th>
+                    <th>Total Msgs</th>
+                    <th>Last Active</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="sessions-tbody"></tbody>
+        </table>
+    </div>
+
+    <!-- Logs -->
+    <div id="panel-logs" class="panel">
+        <h2>Live Logs</h2>
+        <div id="log-container"></div>
+    </div>
+
+    <!-- Config -->
+    <div id="panel-config" class="panel">
+        <h2>System Config</h2>
+        <pre id="config-pre" style="background: var(--card-bg); padding: 16px; border-radius: 8px; border: 1px solid var(--border); overflow-x: auto; font-family: monospace;"></pre>
+    </div>
+</div>
+
+<!-- Modals -->
+<div id="model-modal" class="modal-overlay hidden">
+    <div class="modal">
+        <h2 id="model-modal-title" style="margin-top:0;">Edit Model</h2>
+        <input type="hidden" id="model-old-id">
+        <div class="form-group">
+            <label>ID</label>
+            <input type="text" id="model-id">
+        </div>
+        <div class="form-group">
+            <label>Provider</label>
+            <input type="text" id="model-provider">
+        </div>
+        <div style="display:flex; gap:12px;">
+            <div class="form-group" style="flex:1;"><label>Int (1-10)</label><input type="number" id="model-int" min="1" max="10"></div>
+            <div class="form-group" style="flex:1;"><label>Spd (1-10)</label><input type="number" id="model-spd" min="1" max="10"></div>
+            <div class="form-group" style="flex:1;"><label>Tool (1-10)</label><input type="number" id="model-tool" min="1" max="10"></div>
+        </div>
+        <div class="form-group">
+            <label><input type="checkbox" id="model-vis"> Vision Capable</label>
+        </div>
+        <div class="form-group">
+            <label>Context Window</label>
+            <input type="number" id="model-ctx">
+        </div>
+        <div class="form-group">
+            <label>Tags (comma separated)</label>
+            <input type="text" id="model-tags">
+        </div>
+        <div class="modal-actions">
+            <button class="danger" style="background:transparent; border:1px solid var(--border); color:var(--text-main);" onclick="closeModal('model-modal')">Cancel</button>
+            <button onclick="saveModel()">Save</button>
+        </div>
+    </div>
+</div>
+
+<div id="user-modal" class="modal-overlay hidden">
+    <div class="modal">
+        <h2 style="margin-top:0;">Edit System Prompt</h2>
+        <input type="hidden" id="user-modal-id">
+        <div class="form-group">
+            <label>Custom System Prompt for User</label>
+            <textarea id="user-system-prompt" rows="6"></textarea>
+        </div>
+        <div class="modal-actions">
+            <button class="danger" style="background:transparent; border:1px solid var(--border); color:var(--text-main);" onclick="closeModal('user-modal')">Cancel</button>
+            <button onclick="saveUserPrompt()">Save</button>
+        </div>
+    </div>
+</div>
+
+<div id="toast">Message</div>
+
+<script>
+    let token = localStorage.getItem('admin_token');
+    let eventSource = null;
+    let refreshInterval = null;
+
+    if (token) { showApp(); }
+
+    function login() {
+        token = document.getElementById('secret-input').value;
+        if (!token) return;
+        localStorage.setItem('admin_token', token);
+        showApp();
+    }
+
+    function logout() {
+        localStorage.removeItem('admin_token');
+        token = null;
+        if (eventSource) eventSource.close();
+        if (refreshInterval) clearInterval(refreshInterval);
+        document.getElementById('login-screen').classList.remove('hidden');
+        document.getElementById('sidebar').classList.add('hidden');
+        document.getElementById('main-content').classList.add('hidden');
+    }
+
+    function showApp() {
+        document.getElementById('login-screen').classList.add('hidden');
+        document.getElementById('sidebar').classList.remove('hidden');
+        document.getElementById('main-content').classList.remove('hidden');
+        nav('overview');
+        
+        if (refreshInterval) clearInterval(refreshInterval);
+        refreshInterval = setInterval(() => {
+            if (document.getElementById('panel-overview').classList.contains('active')) loadOverview();
+            if (document.getElementById('panel-sessions').classList.contains('active')) loadSessions();
+        }, 30000);
+    }
+
+    async function api(path, method = 'GET', body = null) {
+        const res = await fetch(path, {
+            method,
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                ...(body ? {'Content-Type': 'application/json'} : {})
+            },
+            body: body ? JSON.stringify(body) : null
+        });
+        if (res.status === 401 || res.status === 403) {
+            logout();
+            showToast('Authentication failed', true);
+            throw new Error('Auth failed');
+        }
+        return res.json();
+    }
+
+    function showToast(msg, isError = false) {
+        const toast = document.getElementById('toast');
+        toast.textContent = msg;
+        toast.className = isError ? 'toast-error' : 'toast-success';
+        toast.style.opacity = 1;
+        setTimeout(() => toast.style.opacity = 0, 3000);
+    }
+
+    function nav(panelId) {
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        document.getElementById(`panel-${panelId}`).classList.add('active');
+        event.currentTarget?.classList?.add('active');
+        
+        if (panelId === 'overview') loadOverview();
+        else if (panelId === 'models') loadModels();
+        else if (panelId === 'users') loadUsers();
+        else if (panelId === 'sessions') loadSessions();
+        else if (panelId === 'logs') startLogStream();
+        else if (panelId === 'config') loadConfig();
+        
+        if (panelId !== 'logs' && eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+    }
+
+    async function loadOverview() {
+        try {
+            const status = await api('/api/status');
+            const models = await api('/api/models');
+            const sessions = await api('/api/sessions');
+            
+            document.getElementById('stat-sessions').innerText = sessions.length || 0;
+            document.getElementById('stat-models').innerText = models.models?.length || 0;
+            
+            let html = '';
+            for (const [provider, info] of Object.entries(status.router_health)) {
+                if (info.configured) {
+                    const color = info.latency !== null ? 'status-green' : 'status-red';
+                    html += `<div><span class="status-dot ${color}"></span>${provider}</div>`;
+                }
+            }
+            document.getElementById('stat-providers').innerHTML = html;
+        } catch (e) {}
+    }
+
+    let currentModels = [];
+    async function loadModels() {
+        try {
+            const data = await api('/api/models');
+            currentModels = data.models || [];
+            let html = '';
+            currentModels.forEach(m => {
+                html += `<tr>
+                    <td>${m.id}</td>
+                    <td>${m.provider}</td>
+                    <td>${m.intelligence}</td>
+                    <td>${m.speed}</td>
+                    <td>${m.tool_reliability}</td>
+                    <td>${m.vision ? '✅' : '❌'}</td>
+                    <td>
+                        <button style="background:var(--border)" onclick="openModelModal('${m.id}')">Edit</button>
+                        <button class="danger" onclick="deleteModel('${m.id}')">Del</button>
+                    </td>
+                </tr>`;
+            });
+            document.getElementById('models-tbody').innerHTML = html;
+        } catch (e) {}
+    }
+
+    function openModelModal(id = null) {
+        document.getElementById('model-modal').classList.remove('hidden');
+        if (id) {
+            document.getElementById('model-modal-title').innerText = 'Edit Model';
+            const m = currentModels.find(x => x.id === id);
+            document.getElementById('model-old-id').value = m.id;
+            document.getElementById('model-id').value = m.id;
+            document.getElementById('model-id').disabled = true;
+            document.getElementById('model-provider').value = m.provider;
+            document.getElementById('model-int').value = m.intelligence;
+            document.getElementById('model-spd').value = m.speed;
+            document.getElementById('model-tool').value = m.tool_reliability;
+            document.getElementById('model-vis').checked = m.vision;
+            document.getElementById('model-ctx').value = m.context_window;
+            document.getElementById('model-tags').value = m.tags.join(', ');
+        } else {
+            document.getElementById('model-modal-title').innerText = 'Add Model';
+            document.getElementById('model-old-id').value = '';
+            document.getElementById('model-id').value = '';
+            document.getElementById('model-id').disabled = false;
+            document.getElementById('model-provider').value = '';
+            document.getElementById('model-int').value = 5;
+            document.getElementById('model-spd').value = 5;
+            document.getElementById('model-tool').value = 5;
+            document.getElementById('model-vis').checked = false;
+            document.getElementById('model-ctx').value = 128000;
+            document.getElementById('model-tags').value = 'general';
+        }
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).classList.add('hidden');
+    }
+
+    async function saveModel() {
+        const oldId = document.getElementById('model-old-id').value;
+        const payload = {
+            id: document.getElementById('model-id').value,
+            provider: document.getElementById('model-provider').value,
+            intelligence: parseInt(document.getElementById('model-int').value),
+            speed: parseInt(document.getElementById('model-spd').value),
+            tool_reliability: parseInt(document.getElementById('model-tool').value),
+            vision: document.getElementById('model-vis').checked,
+            context_window: parseInt(document.getElementById('model-ctx').value),
+            tags: document.getElementById('model-tags').value.split(',').map(s=>s.trim()).filter(Boolean)
+        };
+        try {
+            if (oldId) {
+                await api(`/api/models/${oldId}`, 'PUT', payload);
+                showToast('Model updated');
+            } else {
+                await api('/api/models', 'POST', payload);
+                showToast('Model added');
+            }
+            closeModal('model-modal');
+            loadModels();
+        } catch (e) {
+            showToast('Error saving model', true);
+        }
+    }
+
+    async function deleteModel(id) {
+        if (!confirm('Delete this model?')) return;
+        try {
+            await api(`/api/models/${id}`, 'DELETE');
+            showToast('Model deleted');
+            loadModels();
+        } catch(e) {
+            showToast('Error deleting model', true);
+        }
+    }
+
+    async function loadUsers() {
+        try {
+            const users = await api('/api/users');
+            let html = '';
+            users.forEach(u => {
+                const prompt = u.system_prompt ? (u.system_prompt.substring(0, 50) + '...') : '<i>None</i>';
+                html += `<tr>
+                    <td>${u.user_id}</td>
+                    <td>${prompt}</td>
+                    <td>
+                        <button style="background:var(--border)" onclick="openUserModal('${u.user_id}', '${(u.system_prompt || '').replace(/'/g, "\\'")}')">Edit Prompt</button>
+                    </td>
+                </tr>`;
+            });
+            document.getElementById('users-tbody').innerHTML = html;
+        } catch(e) {}
+    }
+
+    function openUserModal(id, prompt) {
+        document.getElementById('user-modal').classList.remove('hidden');
+        document.getElementById('user-modal-id').value = id;
+        document.getElementById('user-system-prompt').value = prompt;
+    }
+
+    async function saveUserPrompt() {
+        const id = document.getElementById('user-modal-id').value;
+        const prompt = document.getElementById('user-system-prompt').value;
+        try {
+            if (prompt.trim()) {
+                await api(`/api/users/${id}/system_prompt`, 'POST', { system_prompt: prompt });
+            } else {
+                await api(`/api/users/${id}/system_prompt`, 'DELETE');
+            }
+            showToast('System prompt saved');
+            closeModal('user-modal');
+            loadUsers();
+        } catch (e) {
+            showToast('Error saving prompt', true);
+        }
+    }
+
+    async function loadSessions() {
+        try {
+            const sessions = await api('/api/sessions');
+            let html = '';
+            sessions.forEach(s => {
+                const dt = new Date(s.last_active * 1000).toLocaleString();
+                html += `<tr>
+                    <td>${s.session_id}</td>
+                    <td>${s.total_messages}</td>
+                    <td>${dt}</td>
+                    <td>
+                        <button class="danger" onclick="clearSession('${s.session_id}')">Clear</button>
+                    </td>
+                </tr>`;
+            });
+            document.getElementById('sessions-tbody').innerHTML = html;
+        } catch(e) {}
+    }
+
+    async function clearSession(id) {
+        if (!confirm('Clear all memory for this session?')) return;
+        try {
+            await api(`/api/sessions/${id}`, 'DELETE');
+            showToast('Session cleared');
+            loadSessions();
+        } catch(e) {
+            showToast('Error clearing session', true);
+        }
+    }
+
+    async function loadConfig() {
+        try {
+            const cfg = await api('/api/config');
+            document.getElementById('config-pre').innerText = JSON.stringify(cfg, null, 2);
+        } catch (e) {}
+    }
+
+function startLogStream() {
+        const container = document.getElementById('log-container');
+        container.innerHTML = '';
+        
+        // Fetch recent first
+        api('/api/logs').then(data => {
+            if (data.logs) {
+                data.logs.forEach(l => appendLog(l));
+                container.scrollTop = container.scrollHeight;
+            }
+        });
+
+        if (eventSource) eventSource.close();
+        eventSource = new EventSource('/api/logs/stream?token=' + encodeURIComponent(token));
+        eventSource.onmessage = (e) => {
+            appendLog(e.data);
+            const container = document.getElementById('log-container');
+            container.scrollTop = container.scrollHeight;
+        };
+        eventSource.onerror = () => {
+            console.error('SSE Error');
+            eventSource.close();
+        };
+    }
+
+    function appendLog(line) {
+        const container = document.getElementById('log-container');
+        const div = document.createElement('div');
+        div.textContent = line;
+        if (line.includes(' INFO ')) div.className = 'log-INFO';
+        else if (line.includes(' WARNING ')) div.className = 'log-WARNING';
+        else if (line.includes(' ERROR ')) div.className = 'log-ERROR';
+        else if (line.includes(' CRITICAL ')) div.className = 'log-CRITICAL';
+        container.appendChild(div);
+    }
+
+    async function rebootSystem() {
+        if (!confirm('Are you sure you want to gracefully reboot OmniAgent?')) return;
+        try {
+            await api('/api/reboot', 'POST');
+            showToast('Reboot signal sent. Reconnecting in 5s...');
+            setTimeout(() => location.reload(), 5000);
+        } catch(e) {
+            showToast('Error sending reboot signal', true);
+        }
+    }
+</script>
+</body>
+</html>

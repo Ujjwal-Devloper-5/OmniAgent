@@ -99,7 +99,7 @@ class GroqAgent(BaseAgent):
         log.info("Groq | task=%s model=%s session=%s", task_type.value, model_name, session_id)
 
         async def _call() -> AgentResponse:
-            effective_prompt = build_system_prompt(platform_system_note)
+            effective_prompt = await build_system_prompt(platform_system_note, session_id)
             async with AsyncSqliteSaver.from_conn_string(settings.db_path) as checkpointer:
                 agent = create_react_agent(
                     llm, tools, checkpointer=checkpointer, prompt=effective_prompt,

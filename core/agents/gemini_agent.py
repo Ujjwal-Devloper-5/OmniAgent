@@ -102,7 +102,7 @@ class GeminiAgent(BaseAgent):
             max_output_tokens=settings.gemini_max_output_tokens,
         )
         tools = get_tools()
-        effective_prompt = build_system_prompt(platform_system_note)
+        effective_prompt = await build_system_prompt(platform_system_note, session_id)
 
         context_summary = await maybe_trim_context(session_id, settings.db_path)
         if context_summary:

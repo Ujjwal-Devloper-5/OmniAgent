@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     slack_signing_secret: Optional[str] = Field(default=None)
 
     # ── Database ──────────────────────────────────────────────────────────────
+    # ── Database (PostgreSQL — primary for production) ──────────────────────────
+    database_url: Optional[str] = Field(
+        default=None,
+        description="PostgreSQL connection URL. If set, overrides SQLite for UnifiedMemory and LangGraph checkpoints."
+    )
+    # SQLite is kept as a local fallback when DATABASE_URL is not set
     db_path: str = Field(default="data/memory.sqlite")
 
     # ── Rate Limiting ─────────────────────────────────────────────────────────
@@ -123,6 +129,8 @@ class Settings(BaseSettings):
     openweathermap_api_key: Optional[str] = Field(default=None)
 
     # ── Logging ───────────────────────────────────────────────────────────────
+    admin_api_secret: Optional[str] = Field(default=None)
+    # ── Logging ───────────────────────────────────────────────────────────────
     log_level:       str = Field(default="INFO")
     log_file:        str = Field(default="logs/omniagent.log")
     log_max_bytes:   int = Field(default=10_485_760)
@@ -137,6 +145,11 @@ class Settings(BaseSettings):
     @property
     def openrouter_free_models_list(self) -> list[str]:
         return [m.strip() for m in self.openrouter_free_models.split(",") if m.strip()]
+
+    @property
+    def use_postgres(self) -> bool:
+        """True when a PostgreSQL DATABASE_URL has been configured."""
+        return bool(self.database_url)
 
     # ── Validators ────────────────────────────────────────────────────────────
 

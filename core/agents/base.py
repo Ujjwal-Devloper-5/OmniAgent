@@ -51,7 +51,7 @@ class AgentResponse:
 # Built dynamically so the real runtime tool list is always embedded.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_system_prompt(platform_note: str = "") -> str:
+async def build_system_prompt(platform_note: str = "", session_id: str = "") -> str:
     """
     Build the system prompt at runtime, injecting the ACTUAL list of tools
     currently registered in the tool registry.  This prevents models from
@@ -131,11 +131,23 @@ BEHAVIOUR RULES
 """
     if platform_note:
         prompt += f"\n{platform_note}"
+    
+    # ── Per-user custom system prompt override (from Admin Dashboard) ──────────
+    try:
+        if session_id:
+            from core.user_settings import get_user_settings
+            user_settings = await get_user_settings().get(session_id)
+            custom_prompt = user_settings.get("system_prompt")
+            if custom_prompt and custom_prompt.strip():
+                prompt += f"\n\n[CUSTOM SYSTEM PROMPT FOR THIS USER]\n{custom_prompt.strip()}"
+    except Exception:
+        pass  # Non-fatal
+    
     return prompt
 
 
 # Keep a static version as fallback (used when import might circular)
-SHARED_SYSTEM_PROMPT = build_system_prompt()
+SHARED_SYSTEM_PROMPT = ""  # Replaced by async call
 
 
 
