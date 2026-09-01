@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:6C63FF,100:00C9FF&height=200&section=header&text=OmniAgent&fontSize=80&fontColor=ffffff&fontAlignY=38&desc=The%20Ultimate%20Self-Hosted%20AI%20Assistant&descAlignY=60&descSize=20&animation=fadeIn" width="100%" />
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:6C63FF,100:00C9FF&height=200&section=header&text=OmniAgent&fontSize=80&fontColor=ffffff&fontAlignY=38&desc=The%20Ultimate%20Self-Hosted%20AI%20Platform&descAlignY=60&descSize=20&animation=fadeIn" width="100%" />
 
 <br/>
 
@@ -15,20 +15,21 @@
 <p align="center">
   <a href="#"><img src="https://img.shields.io/badge/Discord-Bot-5865F2?style=for-the-badge&logo=discord&logoColor=white" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Telegram-Bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Slack-Bot-4A154B?style=for-the-badge&logo=slack&logoColor=white" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Ollama-Local_AI-000000?style=for-the-badge&logo=ollama&logoColor=white" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/OpenRouter-200%2B_Models-FF4500?style=for-the-badge&logo=openai&logoColor=white" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/PostgreSQL-16-336791?style=for-the-badge&logo=postgresql&logoColor=white" /></a>
 </p>
 
 <br/>
 
-> **OmniAgent** is a production-grade, self-hosted AI assistant for Discord & Telegram.
+> **OmniAgent** is a production-grade, self-hosted AI platform for Discord, Telegram, and Slack.
 > It uses a **scored model registry** to pick the smartest available model per task,
-> heals its own memory on crash, streams live responses, runs code in an **isolated Docker sandbox**,
-> and extends infinitely via **MCP servers** — all on your own hardware.
+> lets every user have a **custom AI personality**, provides a **live admin dashboard**,
+> runs code in an **isolated Docker sandbox**, and extends via **MCP servers** — all on your own hardware.
 
 <br/>
 
-[**Quick Start**](#-quick-start) · [**Architecture**](#%EF%B8%8F-architecture) · [**Features**](#-features) · [**Model Registry**](#-dynamic-model-registry) · [**MCP Guide**](#-mcp-model-context-protocol) · [**Configuration**](#-configuration) · [**Contributing**](CONTRIBUTING.md)
+[**Quick Start**](#-quick-start) · [**Architecture**](#%EF%B8%8F-architecture) · [**Features**](#-features) · [**Admin Dashboard**](#-admin-dashboard) · [**Model Registry**](#-dynamic-model-registry) · [**MCP Guide**](#-mcp-model-context-protocol) · [**Database**](#-database--enterprise) · [**Contributing**](CONTRIBUTING.md)
 
 </div>
 
@@ -41,20 +42,27 @@
 <td width="50%">
 
 ### 🎯 Dynamic Model Registry
-Every model in your pool is scored by `intelligence`, `speed`, and `tool_reliability`. OmniAgent automatically picks the highest-scoring capable model for each task — not just the first available provider.
+Every model is scored by `intelligence`, `speed`, and `tool_reliability`. OmniAgent automatically picks the highest-scoring model for each task — and if a model fails 3 times, its score drops and the next best takes over automatically.
 
-- Ask a coding question → highest-IQ model with tool reliability wins
-- Say "hi" → fastest model wins
-- Send an image → only vision-capable models compete
-- A model fails 3 times → score drops, next best takes over
+</td>
+<td width="50%">
+
+### 🎭 Per-User Custom System Prompts
+Every user can have their own AI personality. Set a custom system prompt for any Discord, Telegram, or Slack user from the Admin Dashboard. One bot — unlimited personas.
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### 🖥️ Live Admin Dashboard
+A beautiful dark-theme web dashboard at `http://your-server:8181`. Manage models, users, sessions, and watch live bot logs — all in real-time from your browser.
 
 </td>
 <td width="50%">
 
 ### ⚡ Instant Streaming Responses
-Never waits silently. The moment you send a message, the bot replies with an animated status — `🤔 Thinking...` → `🧠 Processing... (3.2s)` — then **edits it in-place** with the real answer.
-
-Zero dead silence. Zero perceived lag.
+Never waits silently. The bot instantly sends `🤔 Thinking...` and edits it live as the AI generates the answer — on Discord, Telegram, and Slack simultaneously.
 
 </td>
 </tr>
@@ -62,17 +70,13 @@ Zero dead silence. Zero perceived lag.
 <td width="50%">
 
 ### 🛡️ Self-Healing Memory
-When MCP tools crash mid-execution, LangGraph leaves a corrupt checkpoint that permanently breaks the session. OmniAgent **detects this automatically**, surgically wipes the bad SQLite rows, and **retries instantly** — no manual intervention, ever.
+When MCP tools crash mid-execution, LangGraph leaves a corrupt checkpoint. OmniAgent **detects this automatically**, surgically wipes the bad state, and retries — the user never sees an error.
 
 </td>
 <td width="50%">
 
 ### 🧩 MCP — Model Context Protocol
-Plug in any MCP server via `.env` — no code changes required. Ships pre-configured with:
-- **Filesystem** — read/write/search your files
-- **Memory** — persistent knowledge graph
-- **Sequential Thinking** — multi-step reasoning
-- **Puppeteer** — real headless browser automation
+Plug in any MCP server via `.env` — no code changes. Ships with Filesystem, Memory Graph, Sequential Thinking, and Puppeteer. Add GitHub, Jira, PostgreSQL, or any MCP server in 2 lines.
 
 </td>
 </tr>
@@ -80,19 +84,13 @@ Plug in any MCP server via `.env` — no code changes required. Ships pre-config
 <td width="50%">
 
 ### 🔬 Isolated Execution Sandbox
-Every code execution runs in a dedicated **Ubuntu 24.04** Docker container with Python, pip, curl, and git pre-installed. The container is created fresh, runs your code, and is destroyed — with zero risk to the host system.
-
-- Full internet access + `pip install` anything
-- Persistent `/workspace` per session
-- 1GB RAM · 5-minute timeout · 256 PID limit
+Code runs in a dedicated **Ubuntu 24.04** Docker container — Python, pip, curl, git pre-installed, full internet access, persistent `/workspace`. Zero risk to the host.
 
 </td>
 <td width="50%">
 
 ### 🔄 Smart Context Trimming
-After 40+ conversation turns, OmniAgent automatically summarizes older messages into a compact block, wipes the bloated checkpoint, and re-injects a clean summary — **invisible to the user, zero context lost.**
-
-Thread-safe with per-session `asyncio.Lock` to prevent race conditions.
+After 40+ conversation turns, OmniAgent auto-summarizes old messages, wipes the bloated checkpoint, and continues — invisible to the user, zero context lost.
 
 </td>
 </tr>
@@ -100,13 +98,13 @@ Thread-safe with per-session `asyncio.Lock` to prevent race conditions.
 <td width="50%">
 
 ### 📡 OpenRouter Auto-Prober
-Free models on OpenRouter go down constantly. A background daemon probes every model every 12 hours, removes dead endpoints from the active pool, and hot-swaps the routing list **without a restart.**
+Free OpenRouter models go offline constantly. A background daemon probes them every 12 hours and hot-swaps dead models from the pool — without a restart.
 
 </td>
 <td width="50%">
 
 ### 👁️ True Native Multimodal Vision
-Images sent in Discord or Telegram are downloaded as raw bytes, base64-encoded, and passed directly to vision model APIs. No URL passing, no scraping. **The model actually sees your image** at full pixel fidelity.
+Images are downloaded as raw bytes and sent directly to vision model APIs. Telegram, Discord, and Slack all support real image downloads — the model actually sees your pixels.
 
 </td>
 </tr>
@@ -117,59 +115,61 @@ Images sent in Discord or Telegram are downloaded as raw bytes, base64-encoded, 
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Platform Layer                               │
-│   Discord  (streaming · image downloads · slash commands · DMs)     │
-│   Telegram (text · photos · voice)                                  │
-└──────────────────────┬──────────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│              Dynamic Model Registry + Smart Router                  │
-│                                                                     │
-│  Task Classifier  (zero-latency keyword heuristics)                 │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │
-│  │ CODING   │ │  MATH    │ │CREATIVE  │ │RESEARCH  │ │  VISION  │  │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘  │
-│       └────────────┴────────────┴────────────┘            │        │
-│                       │                                   │        │
-│   Scoring Engine  (intelligence×3 + speed×1 + tools×2)   │        │
-│   ┌────────────────────────────────────────────────────┐  │        │
-│   │  gemini-2.5-flash   score: 51  vision:✅  tools:✅  │  │        │
-│   │  gpt-4o             score: 54  vision:✅  tools:✅  │  │        │
-│   │  qwen3:8b           score: 23  vision:❌  tools:❌  │  │        │
-│   │  → Winner: gpt-4o (highest score, passes filters)  │  │        │
-│   └────────────────────────────────────────────────────┘  │        │
-│   Health: 3 failures → score demoted → next model takes over       │
-└──────────────────────┬──────────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                 LangGraph ReAct Agent Engine                        │
-│                                                                     │
-│  ┌──────────────────┐   ┌──────────────────┐  ┌─────────────────┐  │
-│  │   Tool Registry  │   │  MCP Manager     │  │ Context Guard   │  │
-│  │  (16+ tools)     │   │                  │  │                 │  │
-│  │ web_search       │   │ filesystem       │  │ Trim at 40+msgs │  │
-│  │ execute_python   │   │ puppeteer        │  │ Auto-summarize  │  │
-│  │ run_sandbox_cmd  │   │ memory graph     │  │ Lock-protected  │  │
-│  │ fetch_url · more │   │ sequential-think │  └─────────────────┘  │
-│  └──────────────────┘   └──────────────────┘                       │
-│                                                                     │
-│  ┌──────────────────────┐              ┌──────────────────────┐     │
-│  │     Auto-Healer      │              │    Unified Memory    │     │
-│  │ Detect INVALID_CHAT_ │              │  SQLite WAL mode     │     │
-│  │ HISTORY → wipe bad   │              │  Cross-provider log  │     │
-│  │ checkpoint → retry   │              │  Session persists    │     │
-│  └──────────────────────┘              └──────────────────────┘     │
-└─────────────────────────────────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Execution Sandbox                                │
-│   Ubuntu 24.04 · python3 · pip · curl · git pre-installed         │
-│   Per-session persistent /workspace · full internet access         │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          Platform Layer                                 │
+│   Discord  (streaming · vision · slash commands · member welcome)       │
+│   Telegram (streaming · vision · voice · stickers · group context)      │
+│   Slack    (socket mode · threads · vision · file uploads · DMs)        │
+└──────────────────────────┬──────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│             Dynamic Model Registry + Smart Router                       │
+│                                                                         │
+│  Task Classifier (zero-latency keyword heuristics)                      │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐      │
+│  │ CODING   │ │  MATH    │ │CREATIVE  │ │RESEARCH  │ │  VISION  │      │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘      │
+│       └────────────┴────────────┴────────────┴────────────┘            │
+│                                                                         │
+│  Scoring Engine  (per task: intelligence×3 + speed×1 + tools×2)         │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  gpt-4o           score: 54  vision:✅  tools:✅  → WINS         │   │
+│  │  gemini-2.5-flash score: 51  vision:✅  tools:✅  → 2nd choice   │   │
+│  │  qwen3:8b         score: 23  vision:❌  tools:❌  → SKIPPED      │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│  Health: 3 failures → score demoted → next model takes over             │
+└──────────────────────────┬──────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                   LangGraph ReAct Agent Engine                          │
+│                                                                         │
+│  ┌────────────────────┐  ┌──────────────────┐  ┌─────────────────────┐  │
+│  │   Tool Registry    │  │   MCP Manager    │  │   Context Guard     │  │
+│  │  (16+ built-in)    │  │                  │  │                     │  │
+│  │ web_search         │  │ filesystem       │  │ Trim at 40+ msgs    │  │
+│  │ execute_python     │  │ puppeteer        │  │ Auto-summarize      │  │
+│  │ run_sandbox_cmd    │  │ memory graph     │  │ asyncio.Lock safe   │  │
+│  │ fetch_url + more   │  │ sequential-think │  └─────────────────────┘  │
+│  └────────────────────┘  └──────────────────┘                          │
+│                                                                         │
+│  ┌────────────────────┐  ┌──────────────────┐  ┌─────────────────────┐  │
+│  │   Auto-Healer      │  │  Unified Memory  │  │ Per-User Prompts    │  │
+│  │ Detect corrupt     │  │ PostgreSQL or    │  │ Custom AI persona   │  │
+│  │ checkpoint → wipe  │  │ SQLite fallback  │  │ per user_id         │  │
+│  │ → retry silently   │  │ Cross-provider   │  │ Admin Dashboard UI  │  │
+│  └────────────────────┘  └──────────────────┘  └─────────────────────┘  │
+└──────────────────────────┬──────────────────────────────────────────────┘
+                           │
+          ┌────────────────┴──────────────────┐
+          ▼                                   ▼
+┌──────────────────────┐          ┌────────────────────────┐
+│  Execution Sandbox   │          │  Admin Dashboard        │
+│  Ubuntu 24.04 Docker │          │  FastAPI on port 8181   │
+│  pip · curl · git    │          │  Live logs · SSE stream │
+│  Full internet       │          │  Model CRUD · User mgmt │
+└──────────────────────┘          └────────────────────────┘
 ```
 
 ---
@@ -180,10 +180,10 @@ Images sent in Discord or Telegram are downloaded as raw bytes, base64-encoded, 
 
 | Requirement | Notes |
 |---|---|
-| **Docker + Docker Compose** | Strongly recommended for production |
+| **Docker + Docker Compose** | Strongly recommended |
 | **Python 3.12+** | For local development only |
-| **One LLM API key** | Gemini, OpenRouter, Groq, OpenAI, or Anthropic — all have free tiers |
-| **Discord or Telegram token** | At least one platform required |
+| **One LLM API key** | Gemini, OpenRouter, Groq, OpenAI, or Anthropic |
+| **Discord, Telegram, or Slack token** | At least one platform |
 
 ### 1. Clone & Configure
 
@@ -196,20 +196,24 @@ cp .env.example .env
 Open `.env` and fill in at minimum:
 
 ```env
-# Pick at least ONE — all have free tiers
-GEMINI_API_KEY=your_key_here        # https://aistudio.google.com  (free)
-OPENROUTER_API_KEY=your_key_here    # https://openrouter.ai        (free)
-GROQ_API_KEY=your_key_here          # https://console.groq.com     (free)
+# Pick at least ONE AI provider
+GEMINI_API_KEY=your_key_here        # https://aistudio.google.com (free)
+OPENROUTER_API_KEY=your_key_here    # https://openrouter.ai       (free)
+GROQ_API_KEY=your_key_here          # https://console.groq.com    (free)
 
 # Pick at least ONE platform
 DISCORD_TOKEN=your_discord_bot_token
 TELEGRAM_BOT_TOKEN=your_telegram_token
+# SLACK_BOT_TOKEN=xoxb-...          # Optional: see Slack section below
+# SLACK_APP_TOKEN=xapp-...
+
+# Optional: Enable the Admin Dashboard
+# ADMIN_API_SECRET=your_secure_random_secret
 ```
 
 ### 2. Deploy
 
 ```bash
-# Build and launch in production mode
 DOCKER_BUILDKIT=1 docker-compose up -d --build
 
 # Watch live logs
@@ -218,44 +222,63 @@ docker-compose logs -f omniagent
 
 ### 3. Talk to It
 
-- **Discord:** Mention `@YourBot` anywhere, or DM it directly
+- **Discord:** Mention `@YourBot` anywhere or DM it directly
 - **Telegram:** Send any message to your bot
+- **Slack:** `@mention` the bot in a channel or DM it
 
-That's it. The bot is live.
+---
+
+## 🖥️ Admin Dashboard
+
+OmniAgent includes a complete web-based admin dashboard. To enable it, add one line to your `.env`:
+
+```env
+ADMIN_API_SECRET=any_long_random_secret_you_choose
+```
+
+Then restart and open **`http://your-server-ip:8181`** in your browser. Enter your secret to log in.
+
+### Dashboard Panels
+
+| Panel | What You Can Do |
+|---|---|
+| **📊 Overview** | Live provider health, active sessions count, model pool stats |
+| **🤖 Models** | Add, edit scores, or delete any model from `models.json` — takes effect instantly without restart |
+| **👥 Users** | View all users, set a **custom system prompt** for any user ID |
+| **💬 Sessions** | See all active conversations across all platforms, clear any session |
+| **📋 Live Logs** | Real-time color-coded log stream (INFO, WARNING, ERROR) via Server-Sent Events |
+| **⚙️ Config** | Read-only view of all active settings |
+
+### Per-User Custom System Prompts
+
+In the Users panel, click any user and type their custom system prompt. For example:
+
+- **User A (junior dev):** `"You are a patient coding tutor. Explain everything step by step with examples."`
+- **User B (CEO):** `"You are a concise executive assistant. Bullet points only, no fluff."`
+- **User C (customer support):** `"You work for Acme Corp. Only answer questions about our product."`
+
+Every message that user sends will be shaped by their personal prompt — from any platform.
 
 ---
 
 ## 🎯 Dynamic Model Registry
 
-OmniAgent ships with a `models.json` file that defines every known model's capability scores. The router uses these scores to automatically pick the best model for each task — no hardcoded preferences, no guesswork.
+OmniAgent scores every model mathematically and picks the best one per task. No guesswork.
 
-### How Scoring Works
-
-When you send a message, every available model is scored in real-time:
+### Scoring Formula
 
 ```
 final_score = intelligence × 3.0
             + speed × 1.0
-            + tool_reliability × 2.0   (when task requires tool-calling)
-            + 5.0                       (vision bonus, when image attached)
-            - 100.0                     (hard penalty for blind models on vision tasks)
-            - (consecutive_failures × 20)  (health demotion)
+            + tool_reliability × 2.0  (when task requires tool-calling)
+            + 5.0                      (vision bonus, when image attached)
+            - 100.0                    (hard penalty for blind models on vision tasks)
+            - (consecutive_failures × 20)  (health demotion on failures)
 ```
-
-**Example — "write a Python PDF generator" (CODING + tools needed):**
-
-| Model | Intel | Speed | Tool Rel | Score | Result |
-|---|---|---|---|---|---|
-| `gpt-4o` | 9 | 7 | 10 | **54** | ✅ Winner |
-| `gemini-2.5-flash` | 8 | 9 | 9 | **51** | 2nd choice |
-| `llama-3.1-8b:free` | 4 | 9 | 3 | **24** | ❌ Skipped |
-| `qwen3:8b` | 5 | 8 | 3 | **29** | ❌ Skipped |
-
-The 8B model that previously hallucinated a fake screenshot **never even gets invited to handle the task.**
 
 ### Adding Models to the Registry
 
-Open `models.json` and add your model:
+Add any model to `models.json`:
 
 ```json
 {
@@ -272,64 +295,111 @@ Open `models.json` and add your model:
 
 **Score guide:**
 
-| Score | Intelligence | Speed | Tool Reliability |
-|---|---|---|---|
-| **9-10** | Frontier models (GPT-4o, Claude 3.5, Gemini Pro) | Sub-1s response | Reliably formats JSON tool calls |
-| **7-8** | Strong mid-tier (70B+, Gemini Flash) | 1-3s | Usually correct, minor JSON slips |
-| **5-6** | Capable small models (32B, 14B) | 3-6s | Sometimes hallucinates tool args |
-| **3-4** | 8B and smaller | Fast | Often hallucinates or ignores tools |
-| **1-2** | Tiny models (1B-3B) | Blazing | Do not use for tool tasks |
+| Score | Meaning |
+|---|---|
+| **9-10** | Frontier models (GPT-4o, Claude 3.5, Gemini Pro) |
+| **7-8** | Strong mid-tier (70B+, Gemini Flash) |
+| **5-6** | Capable small models (32B, 14B) |
+| **3-4** | 8B and smaller |
+| **1-2** | Tiny models (1-3B) — don't use for tools |
 
-### Ollama Auto-Discovery
-
-Any Ollama model installed on your machine but **not listed in `models.json`** is automatically discovered at boot and registered with safe conservative defaults (`intelligence: 4, speed: 7, tool_reliability: 2`). You can always add it to `models.json` to give it proper scores.
+Ollama models not listed are **auto-discovered** at boot with safe conservative defaults.
 
 ---
 
 ## 🔌 MCP (Model Context Protocol)
 
-OmniAgent ships with 4 MCP servers pre-configured. Add more via `.env` — no code changes required.
+Add any MCP server via `.env` — no code changes.
 
 ### Pre-configured Servers
 
 | Server | What It Gives the AI |
 |---|---|
 | `filesystem` | Read, write, search files in `/app` and `/app/data` |
-| `memory` | Persistent knowledge graph — stores and recalls facts across sessions |
-| `sequential-thinking` | Multi-step chain-of-thought reasoning for complex problems |
-| `puppeteer` | Real Chromium browser — navigate pages, screenshot, fill forms, click |
+| `memory` | Persistent knowledge graph across sessions |
+| `sequential-thinking` | Multi-step chain-of-thought reasoning |
+| `puppeteer` | Real Chromium browser — navigate, screenshot, fill forms |
 
 ### Adding a New MCP Server
 
-Add entries to your `.env`:
-
 ```env
-# Step 1: Add the server name to the comma-separated list
+# Step 1: Add to the comma-separated list
 MCP_SERVERS=filesystem,sequential_thinking,memory,puppeteer,github
 
-# Step 2: Define the new server command and args
+# Step 2: Define it
 MCP_GITHUB_COMMAND=npx
 MCP_GITHUB_ARGS=-y,@modelcontextprotocol/server-github
 ```
 
-Restart the container. The AI now has GitHub tools — automatically discovered, zero code changes.
+Restart. The AI now has GitHub tools — zero code changes.
 
-**More servers to try:**
+**More servers:**
 
 ```env
-# Brave Search — real-time web search with actual results
+# Brave Search — real-time web results
 MCP_BRAVE_COMMAND=npx
 MCP_BRAVE_ARGS=-y,@modelcontextprotocol/server-brave-search
-MCP_BRAVE_ENV_BRAVE_API_KEY=your_brave_key
 
-# PostgreSQL — query your database in natural language
+# PostgreSQL — query your DB in natural language
 MCP_POSTGRES_COMMAND=npx
-MCP_POSTGRES_ARGS=-y,@modelcontextprotocol/server-postgres,postgresql://localhost/mydb
+MCP_POSTGRES_ARGS=-y,@modelcontextprotocol/server-postgres,postgresql://user:pass@host/db
 
-# Web Fetch — advanced page reader with markdown conversion
-MCP_FETCH_COMMAND=uvx
-MCP_FETCH_ARGS=mcp-server-fetch
+# Jira — create and manage tickets via AI
+MCP_JIRA_COMMAND=npx
+MCP_JIRA_ARGS=-y,@kazuph/mcp-jira
 ```
+
+---
+
+## 💬 Slack Setup
+
+OmniAgent uses **Socket Mode** — no public IP, no reverse proxy needed.
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app
+2. Enable **Socket Mode** and generate an App-Level Token (`xapp-...`)
+3. Add these **Bot Token Scopes:** `chat:write`, `app_mentions:read`, `im:read`, `im:write`, `files:read`, `users:read`
+4. Enable **Event Subscriptions** and subscribe to: `app_mention`, `message.im`
+5. Add to `.env`:
+
+```env
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_APP_TOKEN=xapp-your-app-level-token
+SLACK_SIGNING_SECRET=your-signing-secret
+```
+
+Restart. The bot is now live in your Slack workspace.
+
+**Slack-specific features:**
+- `@mention` in any channel → bot replies in a **thread**
+- DM the bot directly for private conversations
+- Upload images → routed to vision AI (downloads privately via Bot Token)
+- `/ask`, `/clear`, `/status`, `/help` slash commands
+
+---
+
+## 🗄️ Database & Enterprise
+
+OmniAgent supports two database backends:
+
+### SQLite (Default — Homelab & Solo Use)
+Zero configuration. Data stored at `data/memory.sqlite`. Perfect for personal use and small teams. Handles hundreds of concurrent users without issues.
+
+### PostgreSQL (Production — Teams & Enterprise)
+For high-concurrency workloads (1000+ simultaneous conversations), switch to PostgreSQL. It's already included in `docker-compose.yml`.
+
+**To enable PostgreSQL:**
+
+```env
+# Add to .env
+DATABASE_URL=postgresql+asyncpg://omniagent:your_password@postgres:5432/omniagent
+POSTGRES_PASSWORD=your_secure_password
+```
+
+> [!IMPORTANT]
+> **Existing SQLite conversation history does not migrate automatically to PostgreSQL.** Only new conversations will be stored in PostgreSQL. If you want to preserve old history, contact us for a migration script.
+
+> [!TIP]
+> For most homelab and small business deployments, **SQLite is completely fine**. Only switch to PostgreSQL if you expect hundreds of simultaneous users.
 
 ---
 
@@ -337,20 +407,18 @@ MCP_FETCH_ARGS=mcp-server-fetch
 
 | Provider | Free Tier | Vision | Best For |
 |---|---|---|---|
-| **Google Gemini** | ✅ Yes | ✅ Yes | Research, math, coding, vision — 1M token context |
-| **OpenRouter** | ✅ Yes (200+ models) | ✅ Some | Largest model variety, free & paid options |
-| **Groq** | ✅ Yes | ❌ No | Speed — LPU inference, sub-second responses |
-| **Ollama** | ✅ Local | ✅ qwen2.5vl | Fully offline, complete privacy, zero API cost |
+| **Google Gemini** | ✅ Yes | ✅ Yes | Research, math, coding, 1M token context |
+| **OpenRouter** | ✅ Yes (200+ models) | ✅ Some | Largest variety of free and paid models |
+| **Groq** | ✅ Yes | ❌ No | Speed — sub-second LPU inference |
+| **Ollama** | ✅ Local | ✅ qwen2.5vl | Fully offline, zero data leaves your machine |
 | **OpenAI** | 💳 Paid | ✅ Yes | GPT-4o — highest tool reliability |
-| **Anthropic** | 💳 Paid | ✅ Yes | Claude — best for creative writing and analysis |
+| **Anthropic** | 💳 Paid | ✅ Yes | Claude — best for writing and analysis |
 
-> You only need **one** to get started. OmniAgent detects which keys are configured at boot and skips the rest automatically.
+> You only need **one** to start. OmniAgent auto-detects which keys are configured and skips the rest.
 
 ---
 
 ## 🧰 Built-in Tool Ecosystem
-
-16+ tools available to the AI out of the box — plus all tools from your MCP servers:
 
 ```
 🌐 Web & Research          🖥️  Sandbox Execution        💾 Memory & Files
@@ -363,6 +431,8 @@ get_current_datetime       list_sandbox_files             list_files
 calculate
 ```
 
+Plus everything from your MCP servers — automatically discovered at boot.
+
 ---
 
 ## 📁 Project Structure
@@ -370,58 +440,54 @@ calculate
 ```
 OmniAgent/
 ├── adapters/
-│   ├── discord_bot.py          # Discord — streaming responses, vision, slash commands
-│   ├── telegram_bot.py         # Telegram adapter
+│   ├── discord_bot.py          # Discord — streaming, vision, slash commands
+│   ├── telegram_bot.py         # Telegram — streaming, vision, groups, voice
+│   ├── slack_bot.py            # Slack — socket mode, threads, file uploads
+│   ├── admin_api.py            # FastAPI admin API (port 8080 internal)
 │   └── cogs/                   # Modular Discord slash command cogs
-│       ├── ai_cog.py           # /ask, /model, /translate, /clear
-│       ├── info_cog.py         # /status, /userinfo, /serverinfo, /help
-│       ├── mod_cog.py          # /purge, /kick, /ban, /announce
-│       ├── util_cog.py         # /poll, /remind, /avatar, /calculate
-│       └── fun_cog.py          # /roll, /8ball, /coinflip
 │
 ├── core/
 │   ├── agents/                 # One agent class per AI provider
-│   │   ├── base.py             # Shared: retry, auto-heal, system prompt builder
-│   │   ├── gemini_agent.py     # Google Gemini (text + native vision PATH)
-│   │   ├── openrouter_agent.py # OpenRouter (200+ models, free tier fallback)
-│   │   ├── ollama_agent.py     # Local Ollama (fully offline, per-task model select)
-│   │   ├── groq_agent.py       # Groq LPU (ultra-fast inference)
-│   │   ├── openai_agent.py     # OpenAI GPT-4o / GPT-4o-mini
-│   │   └── anthropic_agent.py  # Anthropic Claude
+│   │   ├── base.py             # Shared: retry, auto-heal, async system prompt
+│   │   ├── gemini_agent.py
+│   │   ├── openrouter_agent.py
+│   │   ├── ollama_agent.py
+│   │   ├── groq_agent.py
+│   │   ├── openai_agent.py
+│   │   └── anthropic_agent.py
 │   │
 │   ├── model_router.py         # Smart routing engine + health quarantine
 │   ├── model_registry.py       # Dynamic scoring engine — reads models.json
-│   ├── context_manager.py      # Smart context trimming at 40+ checkpoint writes
-│   ├── stream_renderer.py      # Discord live animated 🤔 → response
-│   ├── memory.py               # Unified cross-model SQLite conversation memory
-│   ├── user_brain.py           # Owner cognitive profiling daemon
+│   ├── memory.py               # UnifiedMemory — PostgreSQL + SQLite dual backend
+│   ├── user_settings.py        # Per-user system prompt store
+│   ├── context_manager.py      # Smart context trimming at 40+ turns
+│   ├── stream_renderer.py      # Discord live animated responses
+│   ├── user_brain.py           # Owner cognitive profile daemon
 │   ├── rate_limiter.py         # Per-user RPM + daily token limits
-│   └── health_monitor.py       # Background provider health checker (5-min interval)
+│   └── health_monitor.py       # Background provider health checker
 │
 ├── tools/
-│   ├── registry.py             # Central tool registration + system prompt injection
-│   ├── mcp_manager.py          # MCP server lifecycle (env-driven, stdio + SSE)
+│   ├── registry.py             # Tool registration + system prompt injection
+│   ├── mcp_manager.py          # MCP server lifecycle (env-driven)
 │   ├── sandbox_tool.py         # Ubuntu 24.04 Docker sandbox orchestration
-│   ├── openrouter_prober.py    # Free model auto-discovery daemon (runs every 12h)
-│   ├── search.py               # Web search tool
-│   ├── file_tool.py            # Host filesystem read/write tools
-│   └── ...                     # weather, datetime, calculator, wikipedia, url
+│   └── openrouter_prober.py    # Free model auto-discovery daemon
+│
+├── dashboard/
+│   └── index.html              # Standalone admin dashboard (dark theme, no CDN)
 │
 ├── models.json                 # Model registry — intelligence/speed/tool scores
-├── Dockerfile                  # Multi-stage uv-powered build (Node.js + Chromium included)
-├── docker-compose.yml          # Production config with SYS_ADMIN for Puppeteer
+├── Dockerfile                  # Multi-stage uv-powered build
+├── docker-compose.yml          # PostgreSQL + OmniAgent production config
 ├── .env.example                # Fully documented configuration reference
-└── CONTRIBUTING.md             # Contribution guide
+└── CONTRIBUTING.md
 ```
 
 ---
 
 ## ⚙️ Configuration
 
-The [`.env.example`](.env.example) file is a comprehensive, fully-commented reference for every option.
-
 ```env
-# ── AI Providers ──────────────────────────────────────────────────────
+# ── AI Providers ──────────────────────────────────────────────────────────
 GEMINI_API_KEY=
 OPENROUTER_API_KEY=
 GROQ_API_KEY=
@@ -429,19 +495,26 @@ OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 OLLAMA_BASE_URL=http://localhost:11434
 
-# ── Platforms ─────────────────────────────────────────────────────────
+# ── Platforms ─────────────────────────────────────────────────────────────
 DISCORD_TOKEN=
 TELEGRAM_BOT_TOKEN=
+SLACK_BOT_TOKEN=            # Optional — xoxb-...
+SLACK_APP_TOKEN=            # Optional — xapp-... (Socket Mode)
 
-# ── MCP Servers ───────────────────────────────────────────────────────
+# ── Admin Dashboard ───────────────────────────────────────────────────────
+ADMIN_API_SECRET=           # Set to enable dashboard at :8181
+
+# ── Database ──────────────────────────────────────────────────────────────
+# Leave blank for SQLite (default). Set for PostgreSQL (enterprise).
+# DATABASE_URL=postgresql+asyncpg://omniagent:pass@postgres:5432/omniagent
+# POSTGRES_PASSWORD=
+
+# ── MCP Servers ───────────────────────────────────────────────────────────
 MCP_SERVERS=filesystem,sequential_thinking,memory,puppeteer
-MCP_FILESYSTEM_COMMAND=npx
-MCP_FILESYSTEM_ARGS=-y,@modelcontextprotocol/server-filesystem,/app,/app/data
-# ... (see .env.example for full list)
 
-# ── Performance Tuning ────────────────────────────────────────────────
-MODEL_FAILURE_THRESHOLD=3       # Consecutive failures before quarantine
-MODEL_RECOVERY_SECONDS=300      # Seconds in quarantine before auto-retry
+# ── Performance Tuning ────────────────────────────────────────────────────
+MODEL_FAILURE_THRESHOLD=3       # Failures before quarantine
+MODEL_RECOVERY_SECONDS=300      # Seconds in quarantine before retry
 RATE_LIMIT_RPM=20               # Max requests per minute per user
 ```
 
@@ -449,21 +522,19 @@ RATE_LIMIT_RPM=20               # Max requests per minute per user
 
 ## 🤝 Contributing
 
-Contributions are what make open-source thrive. All forms are welcome.
-
-- 🐛 **Bug Reports** — Open an issue with logs and steps to reproduce
+- 🐛 **Bug Reports** — Open an issue with logs and reproduction steps
 - 💡 **Feature Ideas** — Open a discussion before implementing
 - 🔧 **Pull Requests** — Read [CONTRIBUTING.md](CONTRIBUTING.md) first
-- 📖 **Documentation** — Fix typos, add examples, improve clarity
-- 🎯 **Model Scores** — Add new models to `models.json` with accurate scores
+- 🤖 **Model Scores** — Add new models to `models.json` with accurate scores
+- 🧩 **MCP Servers** — Document useful MCP server configs in the wiki
 
-**Good first issues:** Adding a new MCP server preset · adding a model to `models.json` · improving task classifier keywords · writing tests · adding a new slash command cog.
+**Good first issues:** Add a model to `models.json` · add a new MCP preset · improve task classifier keywords · write tests · add a new slash command cog.
 
 ---
 
 ## 📄 License
 
-Released under the **MIT License** — use it, modify it, ship it freely.
+Released under the **MIT License** — use it, modify it, sell it, ship it.
 
 ---
 
