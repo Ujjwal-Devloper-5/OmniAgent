@@ -9,6 +9,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white" /></a>
   <a href="#"><img src="https://img.shields.io/badge/LangGraph-Powered-FF6B6B?style=for-the-badge&logo=chainlink&logoColor=white" /></a>
   <a href="#"><img src="https://img.shields.io/badge/MCP-Native-00D084?style=for-the-badge&logo=anthropic&logoColor=white" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Agent_Swarm-v1-FF8C00?style=for-the-badge&logo=apachespark&logoColor=white" /></a>
   <a href="#"><img src="https://img.shields.io/badge/License-MIT-F7DF1E?style=for-the-badge&logo=opensourceinitiative&logoColor=black" /></a>
 </p>
 
@@ -23,13 +24,14 @@
 <br/>
 
 > **OmniAgent** is a production-grade, self-hosted AI platform for Discord, Telegram, and Slack.
-> It uses a **scored model registry** to pick the smartest available model per task,
-> lets every user have a **custom AI personality**, provides a **live admin dashboard**,
-> runs code in an **isolated Docker sandbox**, and extends via **MCP servers** — all on your own hardware.
+> It orchestrates a **professional Agent Swarm** for complex research tasks, generates and delivers **PDF reports** directly to any chat, routes every message through a **scored model registry**, lets every user have a **custom AI personality**, and provides a **live admin dashboard** — all running privately on your own hardware.
 
 <br/>
 
-[**Quick Start**](#-quick-start) · [**Architecture**](#%EF%B8%8F-architecture) · [**Features**](#-features) · [**Admin Dashboard**](#-admin-dashboard) · [**Model Registry**](#-dynamic-model-registry) · [**MCP Guide**](#-mcp-model-context-protocol) · [**Database**](#-database--enterprise) · [**Contributing**](CONTRIBUTING.md)
+[**Quick Start**](#-quick-start) · [**Architecture**](#%EF%B8%8F-architecture) · [**Features**](#-features) · [**Agent Swarm**](#-agent-swarm) · [**Admin Dashboard**](#-admin-dashboard) · [**Model Registry**](#-dynamic-model-registry) · [**MCP Guide**](#-mcp-model-context-protocol) · [**Database**](#-database--enterprise) · [**Contributing**](CONTRIBUTING.md)
+
+</div>
+
 
 </div>
 
@@ -108,7 +110,22 @@ Images are downloaded as raw bytes and sent directly to vision model APIs. Teleg
 
 </td>
 </tr>
+<tr>
+<td width="50%">
+
+### 🐝 Professional Agent Swarm
+Say *"do a deep research report on X"* and OmniAgent deploys a coordinated swarm: **ResearchAgent** gathers data, **AnalystAgent** extracts insights, **WriterAgent** produces the final polished output. Hard caps (MAX_STEPS=5, TIMEOUT=90s) prevent infinite loops.
+
+</td>
+<td width="50%">
+
+### 📎 File Upload & PDF Delivery
+The agent can generate a **beautiful PDF report** from any research — complete with styled headers, code blocks, and tables — and deliver it directly to your Discord channel, Telegram chat, or Slack thread. Just ask for a PDF.
+
+</td>
+</tr>
 </table>
+
 
 ---
 
@@ -117,28 +134,26 @@ Images are downloaded as raw bytes and sent directly to vision model APIs. Teleg
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                          Platform Layer                                 │
-│   Discord  (streaming · vision · slash commands · member welcome)       │
-│   Telegram (streaming · vision · voice · stickers · group context)      │
+│   Discord  (streaming · vision · slash commands · file upload)          │
+│   Telegram (streaming · vision · voice · HTML formatting · file upload) │
 │   Slack    (socket mode · threads · vision · file uploads · DMs)        │
 └──────────────────────────┬──────────────────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│             Dynamic Model Registry + Smart Router                       │
+│          Swarm Detector + Dynamic Model Registry + Smart Router         │
 │                                                                         │
-│  Task Classifier (zero-latency keyword heuristics)                      │
+│  "deep research" / "generate pdf" → SwarmSupervisor kicks in           │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │
+│  │ ResearchAgent│→ │ AnalystAgent │→ │  WriterAgent │ → Synthesizer    │
+│  └──────────────┘  └──────────────┘  └──────────────┘                  │
+│  MAX_STEPS=5 · TIMEOUT=90s · isolated session IDs · failure isolation   │
+│                                                                         │
+│  Regular messages → Task Classifier → Scored Model Router               │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐      │
 │  │ CODING   │ │  MATH    │ │CREATIVE  │ │RESEARCH  │ │  VISION  │      │
 │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘      │
 │       └────────────┴────────────┴────────────┴────────────┘            │
-│                                                                         │
-│  Scoring Engine  (per task: intelligence×3 + speed×1 + tools×2)         │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │  gpt-4o           score: 54  vision:✅  tools:✅  → WINS         │   │
-│  │  gemini-2.5-flash score: 51  vision:✅  tools:✅  → 2nd choice   │   │
-│  │  qwen3:8b         score: 23  vision:❌  tools:❌  → SKIPPED      │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-│  Health: 3 failures → score demoted → next model takes over             │
 └──────────────────────────┬──────────────────────────────────────────────┘
                            │
                            ▼
@@ -147,11 +162,11 @@ Images are downloaded as raw bytes and sent directly to vision model APIs. Teleg
 │                                                                         │
 │  ┌────────────────────┐  ┌──────────────────┐  ┌─────────────────────┐  │
 │  │   Tool Registry    │  │   MCP Manager    │  │   Context Guard     │  │
-│  │  (16+ built-in)    │  │                  │  │                     │  │
+│  │  (18+ built-in)    │  │                  │  │                     │  │
 │  │ web_search         │  │ filesystem       │  │ Trim at 40+ msgs    │  │
 │  │ execute_python     │  │ puppeteer        │  │ Auto-summarize      │  │
-│  │ run_sandbox_cmd    │  │ memory graph     │  │ asyncio.Lock safe   │  │
-│  │ fetch_url + more   │  │ sequential-think │  └─────────────────────┘  │
+│  │ generate_pdf       │  │ memory graph     │  │ asyncio.Lock safe   │  │
+│  │ upload_text_file   │  │ sequential-think │  └─────────────────────┘  │
 │  └────────────────────┘  └──────────────────┘                          │
 │                                                                         │
 │  ┌────────────────────┐  ┌──────────────────┐  ┌─────────────────────┐  │
@@ -171,6 +186,50 @@ Images are downloaded as raw bytes and sent directly to vision model APIs. Teleg
 │  Full internet       │          │  Model CRUD · User mgmt │
 └──────────────────────┘          └────────────────────────┘
 ```
+
+---
+
+## 🐝 Agent Swarm
+
+OmniAgent's swarm automatically activates when it detects complex multi-step requests. You never need to configure it — just ask naturally.
+
+**Trigger phrases** (any of these in your message activate the swarm):
+> "deep research", "research report", "generate a PDF", "create a report", "comprehensive analysis", "detailed research", "in-depth research", "investigate and report"
+
+**How it works:**
+
+```
+User: "Do a deep research on quantum computing and generate a PDF report"
+        │
+        ▼  (keyword detected: "deep research" + "pdf")
+ SwarmSupervisor.run()
+        │
+        ├─► ResearchAgent   — uses web_search + wikipedia extensively
+        │       └─► output stored in scratchpad
+        │
+        ├─► AnalystAgent   — reads ResearchAgent output, extracts key insights
+        │       └─► output stored in scratchpad
+        │
+        └─► WriterAgent    — reads all prior work, writes polished final report
+                └─► passed to Synthesizer
+        │
+        ▼
+ _synthesize()  — combines all outputs into one coherent response
+        │
+        ▼
+ generate_and_upload_pdf()  — creates beautiful PDF, uploads to your chat
+```
+
+**Safety guarantees:**
+| Guard | Value | Purpose |
+|---|---|---|
+| `MAX_STEPS` | 5 | Absolute step limit — no infinite loops |
+| `SWARM_TIMEOUT` | 90s | Wall-clock kill switch |
+| Per-agent timeout | 40s | Individual agent can't block the rest |
+| Session isolation | `:swarm:agent_name` suffix | Sub-agents can't pollute main conversation |
+| Failure isolation | Try/except per agent | One agent failing doesn't kill the rest |
+
+
 
 ---
 

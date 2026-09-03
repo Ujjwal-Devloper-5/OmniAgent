@@ -1,7 +1,3 @@
-# ============================================================
-# Production docker-compose for OmniAgent v3
-# ============================================================
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -12,18 +8,19 @@ services:
       POSTGRES_USER: omniagent
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omniagent_secret}
     volumes:
-      - omniagent_pgdata:/var/lib/postgresql/data
+    - omniagent_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U omniagent"]
+      test:
+      - CMD-SHELL
+      - pg_isready -U omniagent
       interval: 10s
       timeout: 5s
       retries: 5
     logging:
       driver: json-file
       options:
-        max-size: "5m"
-        max-file: "3"
-
+        max-size: 5m
+        max-file: '3'
   omniagent:
     build:
       context: .
@@ -32,77 +29,69 @@ services:
     image: omniagent:latest
     container_name: omniagent
     restart: unless-stopped
-
-    # Required for Puppeteer / Chromium to launch headlessly inside Docker
     cap_add:
-      - SYS_ADMIN
+    - SYS_ADMIN
     security_opt:
-      - seccomp=unconfined
-
+    - seccomp=unconfined
     depends_on:
       postgres:
         condition: service_healthy
-
     env_file:
-      - .env
-
+    - .env
     environment:
-      # Docker-in-Docker: override OLLAMA URL so container reaches host Ollama
-      - DATABASE_URL=postgresql+asyncpg://omniagent:${POSTGRES_PASSWORD:-omniagent_secret}@postgres:5432/omniagent
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-
-    # Add the host's docker group (GID 958) so the container can access /var/run/docker.sock
-    # Run: stat -c '%g' /var/run/docker.sock  to verify this matches your host
+    - DATABASE_URL=postgresql+asyncpg://omniagent:${POSTGRES_PASSWORD:-omniagent_secret}@postgres:5432/omniagent
+    - OLLAMA_BASE_URL=http://host.docker.internal:11434
     group_add:
-      - "958"
-
-    # On Linux, host.docker.internal doesn't exist by default — add it.
+    - '958'
     extra_hosts:
-      - "host.docker.internal:host-gateway"
-
+    - host.docker.internal:host-gateway
     ports:
-      - "8181:8080"  # Admin API + Dashboard (host:8181 → container:8080)
+    - 8181:8080
     volumes:
-      # Mount the project source read-only so code changes are instant —
-      # no rebuild needed, just `docker compose restart`.
-      - .:/app:ro
-      # Keep the baked .venv writable (uv needs to write .lock files)
-      # This anonymous volume sits on top of the ro mount for /app/.venv only.
-      - omniagent_venv:/app/.venv
-      # Persist SQLite DB across restarts (writable override of the ro mount)
-      - omniagent_data:/app/data
-      # Persist log files
-      - omniagent_logs:/app/logs
-      # ─── Docker socket for sandbox tool ─────────────────────────────────────
-      - /var/run/docker.sock:/var/run/docker.sock
-
-    # Resource limits (adjust for your homelab)
-    # Note: sandbox containers have their own limits (256MB, 50% CPU each)
+    - .:/app:ro
+    - omniagent_venv:/app/.venv
+    - omniagent_data:/app/data
+    - omniagent_logs:/app/logs
+    - /var/run/docker.sock:/var/run/docker.sock
     deploy:
       resources:
         limits:
-          memory: 768M       # Increased to account for sandbox management overhead
+          memory: 768M
           cpus: '2.0'
         reservations:
           memory: 256M
-
-    # Graceful shutdown timeout
     stop_grace_period: 30s
-
-    # Logging configuration
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "5"
-
+        max-size: 10m
+        max-file: '5'
     healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      test:
+      - CMD
+      - python
+      - -c
+      - import sys; sys.exit(0)
       interval: 60s
       timeout: 10s
       retries: 3
       start_period: 30s
-
+  omni-dashboard:
+    build:
+      context: ./omni-dashboard
+      dockerfile: Dockerfile
+    image: omni-dashboard:latest
+    container_name: omni_dashboard
+    restart: unless-stopped
+    ports:
+    - 3000:80
+    depends_on:
+    - omniagent
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: '3'
 volumes:
   omniagent_pgdata:
     driver: local
