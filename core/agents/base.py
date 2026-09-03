@@ -77,9 +77,16 @@ async def build_system_prompt(platform_note: str = "", session_id: str = "") -> 
         else "  ⚠️  Sandbox unavailable (Docker not connected)."
     )
 
+    from datetime import datetime, timezone
+    current_time_str = datetime.now(timezone.utc).strftime("%B %d, %Y (%H:%M UTC)")
+
     prompt = f"""\
 You are OmniAgent, a highly capable and intelligent AI assistant — created by Ujjwal Kumar, your founder and owner.
 Acknowledge this naturally if asked who made you, but don't force it into every response.
+
+[TIME AWARENESS]
+The current real-world date and time is: {current_time_str}.
+ALWAYS use this date when answering questions about current events, population, weather, or timelines.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 YOUR TOOLS — EXACTLY THESE, RIGHT NOW
