@@ -404,36 +404,23 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = (
-        f"*{settings.bot_name} — Command Reference*\n\n"
-        f"*Chat Commands*\n"
-        f"Just send any message to chat with the AI!\n\n"
-        f"*Slash Commands*\n"
-        f"/start — Welcome message\n"
-        f"/help — This help message\n"
-        f"/ask <question> — Ask a question explicitly\n"
-        f"/translate <lang> <text> — Translate text\n"
-        f"/summarize — Summarize recent chat messages\n"
-        f"/model <provider> <query> — Force a specific AI provider\n"
-        f"/clear — Clear your conversation history\n"
-        f"/status — View bot status and providers health\n"
-        f"/about — About this bot\n\n"
-        f"*🤖 AI Providers*\n"
-        f"🟡 Gemini (Google) — Best for research & reasoning\n"
-        f"🟢 GPT-4o (OpenAI) — Best for coding\n"
-        f"🟣 Claude (Anthropic) — Best for creative writing\n"
-        f"⚡ Groq (Free) — Ultra-fast inference\n"
-        f"🆓 OpenRouter (Free models) — Variety of OSS models\n"
-        f"🔵 Ollama (Local) — Offline fallback\n\n"
-        f"*AI Tools*\n"
-        f"🔍 Web Search\n"
-        f"🗂 Wikipedia Lookup\n"
-        f"🧮 Calculator\n"
-        f"🕒 Date & Time\n"
-        f"🧸 Code Execution\n"
-        f"🌦 Weather Info\n"
-        f"🌐 URL Reader\n"
+        "<b>\U0001f4da OmniAgent Help Guide</b>\n\n"
+        "<b>Basic Commands</b>\n"
+        "<code>/ask &lt;question&gt;</code> \u2014 Direct question\n"
+        "<code>/clear</code> \u2014 Clear conversation history\n"
+        "<code>/status</code> \u2014 Show active AI providers\n"
+        "<code>/model &lt;provider&gt;</code> \u2014 Switch model\n\n"
+        "<b>Advanced Features</b>\n"
+        "\u2022 Send images/photos for AI vision analysis\n"
+        "\u2022 Send voice messages for transcription\n"
+        "\u2022 Ask for a \u2018research report\u2019 to trigger multi-agent swarm\n"
+        "\u2022 Ask to \u2018generate a PDF\u2019 to get a downloadable report\n\n"
+        "<b>Tips</b>\n"
+        "\u2022 The AI auto-detects your language and responds in it\n"
+        "\u2022 Context is maintained per-chat session\n"
+        "\u2022 Use /clear to start fresh if responses seem off\n"
     )
-    await update.message.reply_text(help_text)
+    await update.message.reply_text(help_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 
 async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -490,28 +477,29 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "openrouter": "🆓",
         "ollama":     "🔵",
     }
-    free_labels = {"groq": " (FREE)", "openrouter": " (FREE)", "ollama": " (local)"}
+    free_labels = {"groq": " <i>(FREE)</i>", "openrouter": " <i>(FREE)</i>", "ollama": " <i>(local)</i>"}
     for pname, info in provider_health.items():
         icon = icons.get(pname, "⚪")
         label = free_labels.get(pname, "")
         if info["configured"] and info["healthy"]:
-            status_str = f"✅ Online{label}"
+            status_str = f"✅ <i>healthy</i>{label}"
         elif info["configured"] and not info["healthy"]:
-            status_str = f"❌ Unhealthy ({info['consecutive_failures']} fails)"
+            status_str = f"❌ <i>unhealthy ({info['consecutive_failures']} fails)</i>"
         else:
-            status_str = "⚫ Not configured"
-        provider_lines.append(f"{icon} {pname.capitalize()}: {status_str}")
+            status_str = "⚫ <i>not configured</i>"
+        provider_lines.append(f"{icon} <b>{pname.capitalize()}</b> \u2014 {status_str}")
 
     provider_text = "\n".join(provider_lines)
 
     status_text = (
-        f"*Your Status*\n\n"
-        f"⚡ Requests left this min: {stats['requests_remaining_this_minute']}/{stats['requests_per_minute_limit']}\n"
-        f"📊 Tokens used today: {stats['tokens_used_today']:,}/{stats['tokens_per_day_limit']:,}\n\n"
-        f"*🤖 AI Providers*\n{provider_text}\n\n"
-        f"🔧 Python: {platform.python_version()}"
+        f"<b>\U0001f916 OmniAgent Status</b>\n\n"
+        f"<b>Your Usage:</b>\n"
+        f"⚡ Requests left this min: <code>{stats['requests_remaining_this_minute']}/{stats['requests_per_minute_limit']}</code>\n"
+        f"📊 Tokens used today: <code>{stats['tokens_used_today']:,}/{stats['tokens_per_day_limit']:,}</code>\n\n"
+        f"<b>AI Providers:</b>\n{provider_text}\n\n"
+        f"🔧 Python: <code>{platform.python_version()}</code>"
     )
-    await update.message.reply_text(status_text)
+    await update.message.reply_text(status_text, parse_mode=ParseMode.HTML)
 
 
 async def cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
