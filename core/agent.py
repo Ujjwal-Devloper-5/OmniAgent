@@ -12,12 +12,6 @@ import asyncio
 
 log = get_logger(__name__)
 
-_SWARM_TRIGGERS = frozenset({
-    "deep research", "research report", "create a report", "generate a report",
-    "generate pdf", "create pdf", "make a pdf", "comprehensive report",
-    "detailed research", "in-depth research", "full analysis", "complete analysis",
-    "research and write", "investigate and report",
-})
 
 
 async def warm_up_router() -> None:
@@ -72,16 +66,23 @@ async def process_message(
     if _is_tool_capability_question(message):
         return _build_capability_response()
 
-    # ── Swarm detection — complex multi-step tasks ────────────────────────────
-    msg_lower = message.lower()
-    if any(trigger in msg_lower for trigger in _SWARM_TRIGGERS):
-        log.info("Swarm triggered for session=%s", session_id)
+    # ── Professional task classification ──────────────────────────────────────
+    from core.task_classifier import classify as _classify_task
+    _decision = _classify_task(message, has_media=has_media)
+    log.info(
+        "TaskClassifier | session=%s | %s",
+        session_id, _decision.rationale
+    )
+
+    # ── Swarm activation ─────────────────────────────────────────────────────
+    if _decision.use_swarm:
+        log.info("Swarm activated | session=%s | type=%s", session_id, _decision.task_type)
         try:
             from core.swarm import run_swarm
             result = await run_swarm(message, session_id, platform)
-            # Store in unified memory
             try:
                 from core.memory import get_memory
+                import asyncio
                 mem = get_memory()
                 asyncio.ensure_future(mem.add_turn(session_id, "user", message))
                 asyncio.ensure_future(mem.add_turn(session_id, "assistant", result))

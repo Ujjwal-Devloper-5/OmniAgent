@@ -132,36 +132,10 @@ _QUICK_PATTERNS = frozenset({
 
 
 def classify_task(message: str, has_media: bool = False) -> TaskType:
-    """
-    Classify a message into a TaskType using keyword heuristics.
-    Zero API calls, pure Python — called before any LLM interaction.
-    """
-    if has_media:
-        return TaskType.VISION
-
-    lower = message.lower().strip()
-
-    # Very short common greetings → QUICK (use fastest provider)
-    if len(lower) < 40 and any(lower.startswith(p) for p in _QUICK_PATTERNS):
-        return TaskType.QUICK
-
-    words = set(lower.split())
-    scores = {
-        TaskType.CODING:   len(words & _CODING_KEYWORDS),
-        TaskType.MATH:     len(words & _MATH_KEYWORDS),
-        TaskType.CREATIVE: len(words & _CREATIVE_KEYWORDS),
-        TaskType.RESEARCH: len(words & _RESEARCH_KEYWORDS),
-    }
-
-    best_type, best_score = max(scores.items(), key=lambda x: x[1])
-    if best_score >= 1:
-        return best_type
-
-    # Long messages → ANALYSIS
-    if len(lower) > 300:
-        return TaskType.ANALYSIS
-
-    return TaskType.GENERAL
+    """Classify a message into a TaskType. Delegates to professional task classifier."""
+    from core.task_classifier import classify as _classify
+    decision = _classify(message, has_media=has_media)
+    return decision.task_type
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -599,9 +573,21 @@ class ModelRouter:
             await self.probe_all_providers()
 
         task_type = classify_task(message, has_media=has_media)
+        
+        # Use professional classifier for capability-based routing
+        from core.task_classifier import classify as _classify
+        decision = _classify(message, has_media=has_media)
+        # Use classifier capabilities if not overriding
+        task_cap = decision.capabilities_needed
 
         needs_vision = has_media or task_type == TaskType.VISION
         available = self._get_available_providers()
+        
+        # Capability filtering
+        available = [
+            p for p in available
+            if all(c in _PROVIDER_CAPS.get(p, set()) for c in task_cap)
+        ]
 
         log.info(
             "Routing | session=%s platform=%s task=%s media=%s available=[%s]",

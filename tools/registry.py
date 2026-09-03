@@ -73,9 +73,9 @@ except Exception as _e:
 
 # Upload tools — file delivery to Discord/Telegram/Slack
 try:
-    from tools.upload_tool import generate_and_upload_pdf, upload_text_file
-    _CORE_TOOLS.extend([generate_and_upload_pdf, upload_text_file])
-    log.info("Upload tools loaded: generate_and_upload_pdf, upload_text_file")
+    from tools.upload_tool import upload_file, run_code_and_upload
+    _CORE_TOOLS.extend([upload_file, run_code_and_upload])
+    log.info("Universal file delivery tools loaded: upload_file, run_code_and_upload")
 except Exception as _upload_err:
     log.warning("Upload tools unavailable: %s", _upload_err)
 

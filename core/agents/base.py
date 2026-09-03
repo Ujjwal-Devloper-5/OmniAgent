@@ -111,6 +111,16 @@ TOOL USAGE GUIDE
 • Recall a saved fact             → recall_notes
 • Long-running tasks (5+ min)     → run_sandbox_command (timeout is 5 minutes per command)
 
+FILE GENERATION & DELIVERY:
+  • upload_file — Upload any text content as a file (TXT, CSV, JSON, YAML, Markdown, code files, etc.)
+  • run_code_and_upload — Write Python code that generates ANY file format, then auto-uploads it.
+    For PDFs: use weasyprint. For Excel: use openpyxl. For charts: use matplotlib. For PPTX: use python-pptx.
+    Your code MUST write to /output/<filename>. The /output/ dir is pre-created.
+    Example: if user wants an Excel file, write openpyxl code that saves to /output/data.xlsx
+    Example: if user wants a PDF report, write weasyprint code that writes to /output/report.pdf
+    Example: if user wants a chart image, write matplotlib code that saves to /output/chart.png
+    ALWAYS use run_code_and_upload for binary files. Use upload_file for text-only content.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BEHAVIOUR RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
