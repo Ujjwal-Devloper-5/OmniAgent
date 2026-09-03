@@ -29,6 +29,12 @@ async def _discord_file_upload(file_path: str, filename: str, channel_id: str, d
     import discord as _dc
     bot = get_discord_bot()
     channel = bot.get_channel(int(channel_id))
+    if not channel:
+        try:
+            channel = await bot.fetch_channel(int(channel_id))
+        except Exception as e:
+            log.warning("Discord upload: failed to fetch channel %s: %s", channel_id, e)
+    
     if channel:
         await channel.send(
             content=description if description else None,
@@ -36,6 +42,7 @@ async def _discord_file_upload(file_path: str, filename: str, channel_id: str, d
         )
     else:
         log.warning("Discord upload: channel %s not found", channel_id)
+        raise RuntimeError(f"Discord channel {channel_id} not found or not accessible.")
 
 register_upload_callback('discord', _discord_file_upload)
 
