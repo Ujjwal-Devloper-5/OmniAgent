@@ -157,7 +157,7 @@ async def run_code_and_upload(python_code: str, output_filename: str, descriptio
     1. Write the output file to exactly: /output/<filename>  (e.g. /output/report.pdf)
     2. The /output/ directory is pre-created for you — do NOT create it.
     3. Install any needed packages at the top with: import subprocess; subprocess.run(['pip', 'install', 'packagename', '-q'], check=True)
-    4. Your code runs in an isolated subprocess with a 60-second timeout.
+    4. Your code runs in an isolated subprocess with a 120-second timeout.
     5. If your code raises an exception, the upload will fail and the error will be shown.
 
     Example code for a PDF:
@@ -199,14 +199,14 @@ async def run_code_and_upload(python_code: str, output_filename: str, descriptio
                         [sys.executable, str(script_path)],
                         capture_output=True,
                         text=True,
-                        timeout=60,
+                        timeout=120,
                         cwd=tmpdir,
                     )
                 ),
-                timeout=65.0,
+                timeout=125.0,
             )
         except asyncio.TimeoutError:
-            return "❌ Code execution timed out (60s limit)."
+            return "❌ Code execution timed out (120s limit)."
 
         if proc.returncode != 0:
             stderr = (proc.stderr or "")[:800]
