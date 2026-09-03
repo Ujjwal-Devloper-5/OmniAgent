@@ -20,8 +20,25 @@ from core.helpers import split_message
 from core.logger import get_logger
 from core.rate_limiter import get_rate_limiter
 from core.stream_renderer import StreamRenderer
+from tools.upload_tool import set_upload_context, register_upload_callback
 
 log = get_logger(__name__)
+
+async def _discord_file_upload(file_path: str, filename: str, channel_id: str, description: str = "") -> None:
+    """Upload a file to a Discord channel."""
+    import discord as _dc
+    bot = get_discord_bot()
+    channel = bot.get_channel(int(channel_id))
+    if channel:
+        await channel.send(
+            content=description if description else None,
+            file=_dc.File(file_path, filename=filename)
+        )
+    else:
+        log.warning("Discord upload: channel %s not found", channel_id)
+
+register_upload_callback('discord', _discord_file_upload)
+
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 _CONTEXT_MESSAGES   = 20    # How many channel messages to read for context
@@ -398,6 +415,7 @@ class OmniAgentDiscord(commands.Bot):
         except Exception:
             pass
 
+        set_upload_context('discord', str(message.channel.id))
         await self.handle_ai_request(
             message=message,
             content=enriched_content,

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import platform
 import asyncio
+import re as _re
 from datetime import datetime, timezone
 from collections import deque
 
@@ -36,8 +37,12 @@ from core.logger import get_logger
 from core.rate_limiter import get_rate_limiter
 from core.user_brain import get_brain, is_owner
 from core.memory import get_memory
+from tools.upload_tool import set_upload_context, register_upload_callback
 
 log = get_logger(__name__)
+
+_tg_app = None
+
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -58,21 +63,96 @@ def escape_markdown(text: str) -> str:
     return text
 
 
+def md_to_tg_html(text: str) -> str:
+    """
+    Convert AI markdown output to Telegram-safe HTML.
+    Handles: code blocks, inline code, headers, bold, italic, links, lists.
+    Always returns a string; never raises.
+    """
+    try:
+        def _esc(s: str) -> str:
+            """Escape HTML special chars."""
+            return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+        # Split on fenced code blocks to protect them from other processing
+        parts = _re.split(r'(```[\w]*\n?[\s\S]*?```)', text)
+        result = []
+
+        for part in parts:
+            # ── Code block ────────────────────────────────────────────────
+            if part.startswith('```'):
+                m = _re.match(r'```([\w]*)\n?([\s\S]*?)```', part, _re.DOTALL)
+                if m:
+                    lang = _esc(m.group(1).strip())
+                    code = _esc(m.group(2).strip())
+                    if lang:
+                        result.append(f'<pre><code class="{lang}">{code}</code></pre>')
+                    else:
+                        result.append(f'<pre>{code}</pre>')
+                else:
+                    result.append(_esc(part))
+                continue
+
+            # ── Regular text: escape first, then apply formatting ─────────
+            p = _esc(part)
+
+            # Headers
+            p = _re.sub(r'^### (.+)$', r'<b>\u25c6 \1</b>', p, flags=_re.MULTILINE)
+            p = _re.sub(r'^## (.+)$', r'\n<b>\u2501\u2501 \1 \u2501\u2501</b>\n', p, flags=_re.MULTILINE)
+            p = _re.sub(r'^# (.+)$', r'\n<b>\U0001f537 \1</b>\n', p, flags=_re.MULTILINE)
+
+            # Bold: **text** or __text__
+            p = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', p, flags=_re.DOTALL)
+            p = _re.sub(r'__(.+?)__', r'<b>\1</b>', p, flags=_re.DOTALL)
+
+            # Italic: *text* (single) — be careful not to match **
+            p = _re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', p)
+
+            # Inline code (must come AFTER bold/italic to avoid conflicts)
+            p = _re.sub(r'`([^`]+)`', lambda m: f'<code>{_esc(m.group(1))}</code>', p)
+
+            # Links [text](url)
+            p = _re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', p)
+
+            # Unordered lists
+            p = _re.sub(r'^[\-\*] (.+)$', r'\u2022 \1', p, flags=_re.MULTILINE)
+
+            # Horizontal rules
+            p = _re.sub(r'^-{3,}$', '\u2501' * 20, p, flags=_re.MULTILINE)
+
+            result.append(p)
+
+        return ''.join(result)
+    except Exception:
+        # Ultimate fallback: return text with HTML special chars escaped
+        try:
+            return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        except Exception:
+            return str(text)
+
+
 async def _send_long_message(
     update: Update,
     text: str,
     max_length: int = 4000,
 ) -> None:
-    """Send a potentially long message, chunked if needed."""
-    chunks = split_message(text, max_length=max_length)
+    """Send a potentially long message, chunked if needed, with HTML formatting."""
+    formatted = md_to_tg_html(text)
+    chunks = split_message(formatted, max_length=max_length)
     for chunk in chunks:
         try:
-            await update.message.reply_text(chunk)
+            await update.message.reply_text(
+                chunk,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
         except Exception as exc:
-            log.warning("Failed to send Telegram chunk: %s", exc)
-            # Try plain text
+            log.warning("HTML send failed, trying plain text: %s", exc)
             try:
-                await update.message.reply_text(chunk)
+                # Strip HTML tags as fallback
+                import re
+                plain = re.sub(r'<[^>]+>', '', chunk)
+                await update.message.reply_text(plain[:4000])
             except Exception:
                 pass
 
@@ -95,6 +175,8 @@ def _update_chat_history(update: Update) -> None:
 # ───────────────────────────────────────────────────────────────────────────────
 
 class TelegramStreamRenderer:
+    """Renders AI responses to Telegram with HTML formatting and graceful fallback."""
+
     def __init__(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self.update = update
         self.context = context
@@ -104,40 +186,78 @@ class TelegramStreamRenderer:
         if not self.update.message:
             return
         try:
-            self.message = await self.update.message.reply_text("🤔 Thinking...")
+            self.message = await self.update.message.reply_text(
+                "\u23f3 <i>Thinking...</i>",
+                parse_mode=ParseMode.HTML,
+            )
         except Exception as e:
             log.warning("TelegramStreamRenderer start failed: %s", e)
+            try:
+                self.message = await self.update.message.reply_text("\u23f3 Thinking...")
+            except Exception:
+                pass
 
     async def finish(self, text: str, split_func=None) -> None:
         if not self.message or not text.strip():
             return
-        chunks = split_func(text, max_length=4000) if split_func else [text]
+
+        formatted = md_to_tg_html(text)
+        chunks = split_func(formatted, max_length=4000) if split_func else [formatted]
+
+        # Edit the placeholder message with the first chunk
         try:
             await self.context.bot.edit_message_text(
                 chat_id=self.update.message.chat_id,
                 message_id=self.message.message_id,
-                text=chunks[0]
+                text=chunks[0],
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
             )
         except Exception as e:
-            log.warning("TelegramStreamRenderer edit failed: %s", e)
-        
-        for chunk in chunks[1:]:
+            log.warning("TelegramStreamRenderer HTML edit failed: %s \u2014 trying plain text", e)
             try:
-                await self.update.message.reply_text(chunk)
+                await self.context.bot.edit_message_text(
+                    chat_id=self.update.message.chat_id,
+                    message_id=self.message.message_id,
+                    text=text[:4000],
+                )
             except Exception:
                 pass
+
+        # Send additional chunks if message was long
+        for chunk in chunks[1:]:
+            try:
+                await self.update.message.reply_text(
+                    chunk,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                try:
+                    await self.update.message.reply_text(chunk[:4000])
+                except Exception:
+                    pass
 
     async def error(self, text: str) -> None:
         if not self.message:
             return
+        error_html = f"<b>\u274c Error</b>\n<code>{text[:300]}</code>"
         try:
             await self.context.bot.edit_message_text(
                 chat_id=self.update.message.chat_id,
                 message_id=self.message.message_id,
-                text=text
+                text=error_html,
+                parse_mode=ParseMode.HTML,
             )
         except Exception:
-            pass
+            try:
+                await self.context.bot.edit_message_text(
+                    chat_id=self.update.message.chat_id,
+                    message_id=self.message.message_id,
+                    text=text[:4000],
+                )
+            except Exception:
+                pass
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -214,6 +334,8 @@ async def _handle_ai_message(
 
     enriched_content = "\n\n".join(parts)
 
+    set_upload_context('telegram', str(update.message.chat_id))
+
     renderer = TelegramStreamRenderer(update, context)
     await renderer.start()
 
@@ -260,19 +382,24 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    user_name = update.message.from_user.first_name if update.message and update.message.from_user else "there"
-    await update.message.reply_text(
-        f"Hey {user_name}! 🤖 I'm **{settings.bot_name}**, your intelligent AI assistant.\n\n"
-        f"I'm powered by **Google Gemini** and can:\n"
-        f"\u2022 Answer any question with web search\n"
-        f"\u2022 Look up Wikipedia articles\n"
-        f"\u2022 Do math and run code\n"
-        f"\u2022 Check the weather\n"
-        f"\u2022 Read URLs you share\n"
-        f"\u2022 Remember your full conversation\n\n"
-        f"Just send me any message to start! Use /help for all commands.",
-        reply_markup=reply_markup,
+    welcome = (
+        "<b>\U0001f680 OmniAgent</b> \u2014 Your AI-Powered Assistant\n\n"
+        "<b>What I can do:</b>\n"
+        "\u2022 \U0001f50d Deep research &amp; web browsing\n"
+        "\u2022 \U0001f4bb Write, debug &amp; execute code\n"
+        "\u2022 \U0001f4c4 Generate &amp; upload PDF reports\n"
+        "\u2022 \U0001f9ee Solve math &amp; data analysis\n"
+        "\u2022 \U0001f4ca Comprehensive multi-step analysis\n"
+        "\u2022 \U0001f4ac Chat in any language\n\n"
+        "<b>Commands:</b>\n"
+        "<code>/ask &lt;question&gt;</code> \u2014 Ask anything\n"
+        "<code>/clear</code> \u2014 Reset conversation\n"
+        "<code>/status</code> \u2014 AI provider health\n"
+        "<code>/model &lt;name&gt;</code> \u2014 Switch AI model\n"
+        "<code>/help</code> \u2014 Full help guide\n\n"
+        "Just send a message to get started! \U0001f447"
     )
+    await update.message.reply_text(welcome, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -563,6 +690,21 @@ async def start_telegram() -> None:
         .concurrent_updates(True)
         .build()
     )
+
+    global _tg_app
+    _tg_app = app
+
+    async def _telegram_file_upload(file_path: str, filename: str, chat_id: str, description: str = "") -> None:
+        if _tg_app:
+            with open(file_path, 'rb') as f:
+                from telegram import InputFile
+                await _tg_app.bot.send_document(
+                    chat_id=int(chat_id),
+                    document=InputFile(f, filename=filename),
+                    caption=description[:1024] if description else None,
+                )
+
+    register_upload_callback('telegram', _telegram_file_upload)
 
     # Register commands
     app.add_handler(CommandHandler("start", cmd_start))

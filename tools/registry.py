@@ -71,6 +71,15 @@ except Exception as _e:
     _SANDBOX_TOOLS = []
     _SANDBOX_AVAILABLE = False
 
+# Upload tools — file delivery to Discord/Telegram/Slack
+try:
+    from tools.upload_tool import generate_and_upload_pdf, upload_text_file
+    _CORE_TOOLS.extend([generate_and_upload_pdf, upload_text_file])
+    log.info("Upload tools loaded: generate_and_upload_pdf, upload_text_file")
+except Exception as _upload_err:
+    log.warning("Upload tools unavailable: %s", _upload_err)
+
+
 # ── Combined tool list — what the agent sees ──────────────────────────────────
 _ALL_TOOLS: list[Any] = _CORE_TOOLS + _SANDBOX_TOOLS
 
