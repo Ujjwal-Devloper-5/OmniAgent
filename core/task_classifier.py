@@ -79,11 +79,20 @@ class TaskDecision:
         return self.complexity == ComplexityLevel.HIGH
 
 
+# Pre-compiled word boundary pattern cache
+_WB_PATTERN_CACHE: dict[str, re.Pattern] = {}
+
+def _word_in_text(word: str, text: str) -> bool:
+    """Check if `word` appears as a whole word in `text` (word-boundary aware)."""
+    if word not in _WB_PATTERN_CACHE:
+        _WB_PATTERN_CACHE[word] = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
+    return bool(_WB_PATTERN_CACHE[word].search(text))
+
 # ─── Signal word sets ──────────────────────────────────────────────────────────
 
 _QUICK_SIGNALS = frozenset({
     "what time", "what date", "today", "current time", "hi", "hello",
-    "hey", "thanks", "thank you", "ok", "okay", "sure", "yes", "no",
+    "hey", "thanks", "thank you", "ok", "okay", "sure", "yes",
     "how are you", "what's up", "who are you", "your name",
     "translate", "define", "meaning of", "spell", "synonym",
     "weather", "temperature",
@@ -139,14 +148,13 @@ _DEPTH_SIGNALS = frozenset({
     "everything about", "all aspects",
 })
 
-_FILE_OUTPUT_SIGNALS = frozenset({
-    "pdf", "report", "document", "spreadsheet", "excel", "csv",
-    "file", "download", "export", "save", "generate a file",
-    "create a document", "make a report", "write a report",
-    "send me a", "give me a file", "output file", "create a pdf",
-    "powerpoint", "presentation", "slides", "zip", "archive",
-    "word document", "docx", "chart", "graph as file",
-})
+_FILE_OUTPUT_SIGNALS = frozenset([
+    "pdf", "excel", "spreadsheet", "powerpoint", "docx", "download",
+    "export", "generate report", "create report", "make a report",
+    "write a report", "create a file", "save to file", "save as pdf",
+    "create a pdf", "make a pdf", "generate pdf", "save as excel",
+    "csv file", "zip file", "archive", "attachment",
+])
 
 _VISION_SIGNALS = frozenset({
     "image", "photo", "picture", "screenshot", "diagram", "chart",
@@ -183,7 +191,16 @@ def _has_code_markers(text: str) -> bool:
 
 def _signal_score(text_lower: str, signal_set: frozenset) -> int:
     """Count how many signals from a set are present in the text."""
-    return sum(1 for s in signal_set if s in text_lower)
+    score = 0
+    for signal in signal_set:
+        # Use word-boundary for single short words that could false-positive
+        if len(signal) <= 4 and ' ' not in signal:
+            if _word_in_text(signal, text_lower):
+                score += 1
+        else:
+            if signal in text_lower:
+                score += 1
+    return score
 
 
 def classify(message: str, has_media: bool = False, platform: str = "") -> TaskDecision:
@@ -238,7 +255,11 @@ def classify(message: str, has_media: bool = False, platform: str = "") -> TaskD
         capabilities = ["general", "text"]
 
     # ─── File output intent ────────────────────────────────────────────────
-    requires_file_output = _signal_score(text_lower, _FILE_OUTPUT_SIGNALS) >= 1
+    requires_file_output = (
+        _signal_score(text_lower, _FILE_OUTPUT_SIGNALS) >= 1
+        or ("report" in text_lower and any(w in text_lower for w in ["create", "generate", "make", "write", "build"]))
+        or ("document" in text_lower and any(w in text_lower for w in ["create", "generate", "make", "write"]))
+    )
 
     # ─── Model Tier ────────────────────────────────────────────────────────
     urgency = _signal_score(text_lower, _URGENCY_SIGNALS) >= 1
@@ -281,6 +302,10 @@ def classify(message: str, has_media: bool = False, platform: str = "") -> TaskD
     # Never swarm for quick/simple/code/math — they don't benefit from it
     if task_type in (TaskType.QUICK, TaskType.CODING, TaskType.MATH, TaskType.VISION):
         use_swarm = False
+        
+    # EXPLICIT OVERRIDE: Always swarm if the user asks for a file (PDFs/scripts) or explicitly requests swarm
+    if "swarm" in text_lower or "multi-agent" in text_lower or requires_file_output:
+        use_swarm = True
 
     # ─── Confidence ────────────────────────────────────────────────────────
     # Higher confidence when multiple strong signals align

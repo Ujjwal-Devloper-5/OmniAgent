@@ -156,7 +156,8 @@ async def make_ai_prompt_with_context(user_message: str, context: str, author: d
 
     # 🚨 GOD MODE / CREATOR OVERRIDE 🚨
     god_mode_instruction = ""
-    is_owner = "ujjwal" in author.name.lower() or "ujjwal" in author.display_name.lower()
+    from core.user_brain import is_owner as _is_owner
+    is_owner = _is_owner(str(author.id), platform="discord")
     
     if is_owner:
         god_mode_instruction = (
@@ -400,14 +401,9 @@ class OmniAgentDiscord(commands.Bot):
             await message.reply(random.choice(replies))
             return
 
-        # Fetch channel context for better AI understanding (skip for DMs)
+        # We no longer rely on slow Discord API fetch_channel_context.
+        # The cross-model UnifiedMemory block is now natively injected in core/agent.py!
         context = ""
-        if not is_dm and hasattr(message.channel, "history"):
-            context = await fetch_channel_context(
-                message.channel,
-                limit=_CONTEXT_MESSAGES,
-                before=message,
-            )
 
         # Build enriched prompt with context + language detection
         enriched_content = await make_ai_prompt_with_context(content, context, message.author)
@@ -415,7 +411,7 @@ class OmniAgentDiscord(commands.Bot):
         # ── Fire-and-forget: update Ujjwal's brain profile in background ─────
         try:
             from core.user_brain import get_brain, is_owner as _is_owner
-            if _is_owner(message.author.name, message.author.display_name):
+            if _is_owner(str(message.author.id), platform="discord"):
                 asyncio.create_task(
                     get_brain().process_message(content, platform="discord")
                 )
@@ -458,7 +454,7 @@ class OmniAgentDiscord(commands.Bot):
                 await reply_to.reply(reason)
             return
 
-        session_id = f"discord_{user_id}"
+        # ── Dual-Memory Architecture ─────────────────────────────────────────────
         channel = (
             message.channel
             if message
@@ -466,6 +462,15 @@ class OmniAgentDiscord(commands.Bot):
         )
         if channel is None:
             return
+
+        is_dm = False
+        if hasattr(channel, "type"):
+            is_dm = (channel.type == discord.ChannelType.private)
+
+        if is_dm:
+            session_id = f"discord_dm_{user_id}"
+        else:
+            session_id = f"discord_channel_{channel.id}"
 
         try:
             renderer = None
@@ -481,22 +486,16 @@ class OmniAgentDiscord(commands.Bot):
                 has_media=has_media,
                 image_data=image_data,
                 image_mime=image_mime,
+                raw_message=raw_user_message,  # Pass raw prompt for TaskClassifier
             )
 
             self._messages_processed += 1
+            # Always record token usage against the individual user's bucket
             await rate_limiter.record_tokens(f"discord_{user_id}", len(response) // 4)
 
             # ── Write to UnifiedMemory for cross-model context ────────────────
-            try:
-                from core.memory import get_memory
-                mem = get_memory()
-                raw_msg = raw_user_message or content
-                asyncio.create_task(mem.add_turn(session_id, "user", raw_msg))
-                # Strip footer from response before storing
-                clean_response = response.rsplit("\n\n_—", 1)[0] if "\n\n_—" in response else response
-                asyncio.create_task(mem.add_turn(session_id, "assistant", clean_response))
-            except Exception:
-                pass  # Non-fatal
+            # Note: core/agent.py now handles all memory write-back
+            pass
 
             if interaction:
                 chunks = split_message(response, max_length=1950)

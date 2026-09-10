@@ -16,7 +16,7 @@ import os
 from typing import Any
 
 from tools.calculator import calculate
-from tools.code_tool import execute_python
+
 from tools.datetime_tool import get_current_datetime
 from tools.search import web_search
 from tools.url_tool import fetch_url
@@ -45,12 +45,12 @@ except Exception as _me:
 # We don't pre-load them here; get_tools() fetches them live from the manager.
 
 # ── Core tools (always available) ─────────────────────────────────────────────
+log.warning("execute_python disabled — all code execution routes to run_sandbox_command (Docker sandbox)")
 _CORE_TOOLS: list[Any] = [
     web_search,
     calculate,
     get_current_datetime,
     wikipedia_lookup,
-    execute_python,
     get_weather,
     fetch_url,
     *_FILE_TOOLS,
@@ -73,9 +73,9 @@ except Exception as _e:
 
 # Upload tools — file delivery to Discord/Telegram/Slack
 try:
-    from tools.upload_tool import upload_file, run_code_and_upload
-    _CORE_TOOLS.extend([upload_file, run_code_and_upload])
-    log.info("Universal file delivery tools loaded: upload_file, run_code_and_upload")
+    from tools.upload_tool import upload_file, deliver_sandbox_file
+    _CORE_TOOLS.extend([upload_file, deliver_sandbox_file])
+    log.info("Universal file delivery tools loaded: upload_file, deliver_sandbox_file")
 except Exception as _upload_err:
     log.warning("Upload tools unavailable: %s", _upload_err)
 

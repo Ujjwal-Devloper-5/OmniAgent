@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.logger import get_logger
+from config import settings
 
 log = get_logger(__name__)
 
@@ -214,10 +215,19 @@ def get_brain() -> UjjwalBrain:
     return _brain
 
 
-def is_owner(username: str, display_name: str = "") -> bool:
+def is_owner(user_id: str | int, platform: str = "discord") -> bool:
     """
-    Check if a Discord/Telegram user is Ujjwal (the owner).
-    Returns True if username or display_name contains 'ujjwal'.
+    Securely authenticate the owner by comparing immutable platform user IDs.
+    NEVER uses display names or usernames — those are spoofable by any user.
+    Configure owner IDs in .env: OWNER_DISCORD_IDS=123456789, OWNER_TELEGRAM_IDS=987654321
     """
-    combined = (username + " " + display_name).lower()
-    return "ujjwal" in combined
+    uid = str(user_id).strip()
+    if not uid:
+        return False
+    if platform == "discord":
+        return uid in settings.owner_discord_ids
+    if platform == "telegram":
+        return uid in settings.owner_telegram_ids
+    if platform == "slack":
+        return uid in settings.owner_slack_ids
+    return False

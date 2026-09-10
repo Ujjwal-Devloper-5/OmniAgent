@@ -164,8 +164,8 @@ The agent can generate a **beautiful PDF report** from any research — complete
 │  │   Tool Registry    │  │   MCP Manager    │  │   Context Guard     │  │
 │  │  (18+ built-in)    │  │                  │  │                     │  │
 │  │ web_search         │  │ filesystem       │  │ Trim at 40+ msgs    │  │
-│  │ execute_python     │  │ puppeteer        │  │ Auto-summarize      │  │
-│  │ generate_pdf       │  │ memory graph     │  │ asyncio.Lock safe   │  │
+│  │ run_sandbox_cmd    │  │ puppeteer        │  │ Auto-summarize      │  │
+│  │ deliver_sandbox    │  │ memory graph     │  │ asyncio.Lock safe   │  │
 │  │ upload_text_file   │  │ sequential-think │  └─────────────────────┘  │
 │  └────────────────────┘  └──────────────────┘                          │
 │                                                                         │
@@ -266,6 +266,12 @@ TELEGRAM_BOT_TOKEN=your_telegram_token
 # SLACK_BOT_TOKEN=xoxb-...          # Optional: see Slack section below
 # SLACK_APP_TOKEN=xapp-...
 
+# ⚠️ CRITICAL SECURITY: Set your owner ID (numeric user ID, NOT your username!)
+# Discord: Settings → Advanced → Developer Mode → right-click yourself → Copy User ID
+# Telegram: Send /start to @userinfobot to get your numeric ID
+OWNER_DISCORD_IDS=your_discord_numeric_id
+OWNER_TELEGRAM_IDS=your_telegram_numeric_id
+
 # Optional: Enable the Admin Dashboard
 # ADMIN_API_SECRET=your_secure_random_secret
 ```
@@ -317,6 +323,55 @@ In the Users panel, click any user and type their custom system prompt. For exam
 - **User C (customer support):** `"You work for Acme Corp. Only answer questions about our product."`
 
 Every message that user sends will be shaped by their personal prompt — from any platform.
+
+---
+
+## 🔒 Security
+
+OmniAgent v2.x introduced a hardened security model. Here is what is protected and how to configure it.
+
+### Owner Authentication (CRITICAL)
+
+Owner privileges — which grant God Mode system prompt injection and unrestricted access — are authenticated **exclusively by immutable platform user IDs**, never by display names or usernames.
+
+```env
+# Get your Discord numeric ID: Settings → Advanced → Developer Mode → right-click yourself → Copy User ID
+OWNER_DISCORD_IDS=802188054214869002
+
+# Get your Telegram numeric ID: send /start to @userinfobot
+OWNER_TELEGRAM_IDS=1234567890
+
+# Multiple owners (comma-separated)
+OWNER_DISCORD_IDS=802188054214869002,987654321098765432
+```
+
+> ⚠️ If `OWNER_DISCORD_IDS` is not set, no user on Discord will have owner privileges. This is the safe default.
+
+### Sandbox Security
+
+All code execution happens inside an isolated **Ubuntu 24.04 Docker container**:
+- No access to the host filesystem
+- 1GB RAM limit, 1 CPU core limit
+- No `execute_python` in-process execution (removed — all Python runs in the container)
+- Files generated inside the sandbox are delivered via `deliver_sandbox_file` using `docker cp` — no host execution
+
+### SSRF Protection
+
+The `fetch_url` tool blocks requests to private/internal network ranges:
+- `127.0.0.0/8` (loopback)
+- `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (RFC 1918 private)
+- `169.254.0.0/16` (link-local / cloud metadata service)
+
+### Admin API Security
+
+- Authentication uses **constant-time comparison** (prevents timing attacks)
+- **Bearer token only** — no `?token=` URL parameters (prevents token leakage in logs)
+- CORS restricted to `localhost:3000` and `localhost:8080` only
+- `/api/config` returns an explicit whitelist of safe settings — never exposes API keys, database URLs, or passwords
+
+### MCP Subprocess Isolation
+
+MCP server subprocesses receive only a minimal environment (`PATH`, `HOME`, `LANG`, `TZ`) — never any API keys, database credentials, or platform tokens.
 
 ---
 

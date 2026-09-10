@@ -211,7 +211,8 @@ async def make_ai_prompt_with_context(client, user_message: str, user_id: str) -
             dn = profile.get("display_name", "").lower()
             display_name = profile.get("display_name") or real_name
             
-            if "ujjwal" in real_name or "ujjwal" in dn:
+            from core.user_brain import is_owner as _is_owner
+            if _is_owner(str(user_id), platform="slack"):
                 is_owner = True
     except Exception as exc:
         log.warning("Failed to fetch Slack user info: %s", exc)
@@ -250,8 +251,9 @@ async def make_ai_prompt_with_context(client, user_message: str, user_id: str) -
 # start_slack() will abort before actually connecting if the real tokens are missing.
 app = AsyncApp(token=settings.slack_bot_token or "xoxb-dummy")
 
-async def _process_slack_message(body: dict, client, text: str, user_id: str, channel: str, thread_ts: str | None, files: list = None) -> None:
-    session_id = f"slack_{user_id}"
+async def _process_slack_message(body: dict, client, text: str, user_id: str, channel: str, thread_ts: str | None, files: list = None, session_id: str | None = None) -> None:
+    if not session_id:
+        session_id = f"slack_{user_id}"
     
     rate_limiter = get_rate_limiter()
     allowed, reason = await rate_limiter.check_request(session_id)
@@ -288,19 +290,13 @@ async def _process_slack_message(body: dict, client, text: str, user_id: str, ch
             platform="slack",
             has_media=has_media,
             image_data=image_data,
-            image_mime=image_mime
+            image_mime=image_mime,
+            raw_message=text
         )
 
         await rate_limiter.record_tokens(session_id, len(response) // 4)
 
-        try:
-            from core.memory import get_memory
-            mem = get_memory()
-            asyncio.create_task(mem.add_turn(session_id, "user", text))
-            clean_response = response.rsplit("\n\n_—", 1)[0] if "\n\n_—" in response else response
-            asyncio.create_task(mem.add_turn(session_id, "assistant", clean_response))
-        except Exception:
-            pass
+        # UnifiedMemory write-back is now handled by core/agent.py
 
         await renderer.finish(response)
 
@@ -323,7 +319,12 @@ async def handle_mention(body, say, client) -> None:
             import re
             text = re.sub(r'<@[^>]+>', '', text).strip()
             
-        await _process_slack_message(body, client, text, user_id, channel, thread_ts, files)
+        if thread_ts and thread_ts != event.get("ts"):
+            session_id = f"slack_thread_{channel}_{thread_ts}"
+        else:
+            session_id = f"slack_channel_{channel}"
+            
+        await _process_slack_message(body, client, text, user_id, channel, thread_ts, files, session_id=session_id)
     except Exception as exc:
         log.error("Error in Slack app_mention: %s", exc, exc_info=True)
 
@@ -349,7 +350,8 @@ async def handle_dm(body, say, client) -> None:
         if not user_id:
             return
             
-        await _process_slack_message(body, client, text, user_id, channel, thread_ts, files)
+        session_id = f"slack_dm_{user_id}"
+        await _process_slack_message(body, client, text, user_id, channel, thread_ts, files, session_id=session_id)
     except Exception as exc:
         log.error("Error in Slack message event: %s", exc, exc_info=True)
 

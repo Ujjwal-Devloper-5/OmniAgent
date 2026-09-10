@@ -46,13 +46,18 @@ class AdminLogHandler(logging.Handler):
             msg = self.format(record)
             _log_buffer.append(msg)
             # Push to any active SSE listeners
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
             for q in list(_log_queues):
-                try:
+                if loop and loop.is_running():
+                    loop.call_soon_threadsafe(q.put_nowait, msg)
+                else:
                     q.put_nowait(msg)
-                except Exception:
-                    pass
         except Exception:
-            self.handleError(record)
+            pass  # Never crash the logging system
 
 # ── FastAPI App ───────────────────────────────────────────────────────────────
 
@@ -60,29 +65,40 @@ app = FastAPI(title="OmniAgent Admin API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
-from fastapi.security import APIKeyHeader, APIKeyQuery
+from fastapi import Header
+import secrets
 
-api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
-api_key_query = APIKeyQuery(name="token", auto_error=False)
-
-async def verify_token(header_key: str = Depends(api_key_header), query_key: str = Depends(api_key_query)) -> str:
+async def verify_token(
+    authorization: str | None = Header(default=None),
+) -> None:
+    """Verify admin API token using constant-time comparison to prevent timing attacks."""
     if not settings.admin_api_secret:
-        raise HTTPException(status_code=403, detail="Admin API disabled")
-    
+        raise HTTPException(
+            status_code=503,
+            detail="Admin API is disabled: ADMIN_API_SECRET is not configured"
+        )
     token = None
-    if header_key:
-        token = header_key.replace("Bearer ", "")
-    elif query_key:
-        token = query_key
-        
-    if token != settings.admin_api_secret:
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:].strip()
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid Authorization header. Use: Authorization: Bearer <token>"
+        )
+    # Constant-time comparison to prevent timing attacks
+    if not secrets.compare_digest(token.encode(), settings.admin_api_secret.encode()):
         raise HTTPException(status_code=401, detail="Invalid token")
-    return token
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
@@ -114,10 +130,23 @@ class ModelUpdate(BaseModel):
     context_window: int
     tags: list[str]
 
+from pydantic import BaseModel, Field as PydanticField
+
+class ModelCreateRequest(BaseModel):
+    id: str = PydanticField(..., min_length=1, max_length=200, description="Unique model identifier")
+    provider: str = PydanticField(..., description="Provider name: gemini, openai, anthropic, groq, openrouter, ollama")
+    capabilities: list[str] = PydanticField(default_factory=list)
+    intelligence_score: float = PydanticField(default=5.0, ge=0.0, le=10.0)
+    speed_score: float = PydanticField(default=5.0, ge=0.0, le=10.0)
+    tool_reliability: float = PydanticField(default=5.0, ge=0.0, le=10.0)
+    supports_vision: bool = False
+    is_free_tier: bool = False
+    notes: str = ""
+
 @app.post("/api/models", dependencies=[Depends(verify_token)])
-async def add_model(model_data: dict) -> dict:
+async def add_model(model_data: ModelCreateRequest) -> dict:
     data = json.loads(_REGISTRY_PATH.read_text(encoding="utf-8"))
-    data.setdefault("models", []).append(model_data)
+    data.setdefault("models", []).append(model_data.model_dump())
     _REGISTRY_PATH.write_text(json.dumps(data, indent=2))
     
     # Reload
@@ -225,14 +254,31 @@ async def reboot_system() -> dict:
     asyncio.get_event_loop().call_later(1.0, lambda: sys.exit(0))
     return {"status": "rebooting"}
 
-@app.get("/api/config", dependencies=[Depends(verify_token)])
-async def get_config() -> dict:
-    # Return non-sensitive config
-    safe_config = {}
-    for k, v in settings.model_dump().items():
-        if "token" not in k.lower() and "secret" not in k.lower() and "key" not in k.lower():
-            safe_config[k] = v
-    return safe_config
+@app.get("/api/config")
+async def get_config(_: None = Depends(verify_token)):
+    """Return non-sensitive operational configuration settings."""
+    # Explicit whitelist of settings safe to expose — NEVER expose secrets, keys, tokens, URLs with credentials
+    SAFE_CONFIG_KEYS = {
+        "bot_name", "bot_prefix", "log_level", "default_provider",
+        "coding_provider", "creative_provider", "math_provider", "quick_provider",
+        "fallback_order", "gemini_model", "gemini_model_pro", "gemini_model_flash",
+        "gemini_temperature", "gemini_max_output_tokens",
+        "openai_model", "openai_model_fast", "openai_temperature", "openai_max_tokens",
+        "anthropic_model", "anthropic_model_fast", "anthropic_max_tokens",
+        "ollama_base_url", "ollama_model", "ollama_timeout",
+        "openrouter_model", "openrouter_temperature", "openrouter_max_tokens",
+        "groq_temperature", "groq_max_tokens",
+        "rate_limit_requests_per_minute", "rate_limit_tokens_per_day",
+        "swarm_max_steps", "swarm_total_timeout_seconds", "swarm_agent_timeout_seconds",
+        "swarm_max_dynamic_agents", "sandbox_cmd_timeout_seconds", "sandbox_ttl_seconds",
+        "sandbox_memory_limit", "sandbox_cpu_quota", "sandbox_max_concurrent",
+        "retention_reports_days", "retention_sandbox_volumes_days",
+        "max_history_messages", "health_check_interval_seconds",
+        "model_failure_threshold", "model_recovery_seconds",
+        "log_max_bytes", "log_backup_count",
+    }
+    all_settings = settings.model_dump()
+    return {k: v for k, v in all_settings.items() if k in SAFE_CONFIG_KEYS}
 
 # Serve dashboard from / 
 from fastapi.responses import HTMLResponse

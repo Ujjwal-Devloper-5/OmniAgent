@@ -13,9 +13,13 @@ import signal
 import sys
 
 from core.logger import get_logger, init_logging
+from core.boot_validator import validate_environment
 
 # Initialise logging FIRST before anything else
 init_logging()
+
+# Run pre-flight safety checks BEFORE starting any network tasks or agents
+validate_environment()
 
 log = get_logger(__name__)
 
@@ -99,6 +103,12 @@ async def _run_bots() -> None:
     # Background health monitor
     tasks.append(
         asyncio.create_task(run_health_monitor(), name="health_monitor")
+    )
+
+    # Background Multi-Tenant Janitor Daemon (sweeps expired data)
+    from core.janitor import run_janitor_loop
+    tasks.append(
+        asyncio.create_task(run_janitor_loop(), name="janitor_daemon")
     )
 
     # Background OpenRouter free-model prober (runs 30s after boot, then every 12h)

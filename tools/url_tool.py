@@ -15,6 +15,45 @@ log = get_logger(__name__)
 
 _MAX_CHARS = 4000  # Avoid flooding context
 
+import ipaddress
+import socket
+from urllib.parse import urlparse
+
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),      # Loopback
+    ipaddress.ip_network("10.0.0.0/8"),        # RFC1918 private
+    ipaddress.ip_network("172.16.0.0/12"),     # RFC1918 private
+    ipaddress.ip_network("192.168.0.0/16"),    # RFC1918 private
+    ipaddress.ip_network("169.254.0.0/16"),    # Link-local / cloud metadata
+    ipaddress.ip_network("100.64.0.0/10"),     # Shared address space
+    ipaddress.ip_network("::1/128"),            # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),           # IPv6 unique local
+    ipaddress.ip_network("fe80::/10"),          # IPv6 link-local
+]
+
+def _check_ssrf(url: str) -> None:
+    """Raise ValueError if the URL resolves to a private/internal IP address."""
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Invalid URL: no hostname")
+    try:
+        results = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as e:
+        raise ValueError(f"DNS resolution failed for '{hostname}': {e}")
+    for result in results:
+        ip_str = result[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        for net in _BLOCKED_NETWORKS:
+            if ip in net:
+                raise ValueError(
+                    f"SSRF blocked: '{hostname}' resolves to '{ip}' which is in reserved network {net}. "
+                    f"Only public internet URLs are allowed."
+                )
+
 
 @tool
 def fetch_url(url: str) -> str:
@@ -34,6 +73,7 @@ def fetch_url(url: str) -> str:
         return "Error: URL must start with http:// or https://"
 
     try:
+        _check_ssrf(url)
         import httpx
 
         headers = {
@@ -51,9 +91,21 @@ def fetch_url(url: str) -> str:
             text = resp.text
 
         # Strip HTML tags
-        clean = re.sub(r"<[^>]+>", " ", text)
-        # Collapse whitespace
-        clean = re.sub(r"\s+", " ", clean).strip()
+        try:
+            import trafilatura
+            content = trafilatura.extract(resp.text, include_tables=True, include_links=False, no_fallback=False)
+            if not content:
+                # Fallback: basic tag stripping
+                import re
+                content = re.sub(r'<style[^>]*>.*?</style>', ' ', resp.text, flags=re.DOTALL|re.IGNORECASE)
+                content = re.sub(r'<script[^>]*>.*?</script>', ' ', content, flags=re.DOTALL|re.IGNORECASE)
+                content = re.sub(r'<[^>]+>', ' ', content)
+                content = re.sub(r'\s+', ' ', content).strip()
+        except ImportError:
+            import re
+            content = re.sub(r'<[^>]+>', ' ', resp.text)
+            content = re.sub(r'\s+', ' ', content).strip()
+        clean = content
 
         if len(clean) > _MAX_CHARS:
             clean = clean[:_MAX_CHARS] + f"\n\n[... content truncated at {_MAX_CHARS} chars]"

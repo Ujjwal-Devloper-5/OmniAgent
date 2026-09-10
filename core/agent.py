@@ -31,6 +31,7 @@ async def process_message(
     has_media:      bool        = False,
     image_data:     bytes | None = None,
     image_mime:     str          = "image/jpeg",
+    raw_message:    str | None  = None,
 ) -> str:
     """
     Process a user message using the best available AI provider.
@@ -54,6 +55,7 @@ async def process_message(
                      When provided, passed directly to vision-capable models
                      (Gemini, OpenAI) — they actually SEE the image.
     image_mime     : MIME type of the image (e.g. "image/png", "image/jpeg").
+    raw_message    : The original unprocessed user prompt.
 
     Returns
     -------
@@ -68,14 +70,29 @@ async def process_message(
 
     # ── Professional task classification ──────────────────────────────────────
     from core.task_classifier import classify as _classify_task
-    _decision = _classify_task(message, has_media=has_media)
+    
+    # Classify the RAW user prompt so injected context/history doesn't trigger false positives
+    classifier_input = raw_message if raw_message else message
+    _decision = _classify_task(classifier_input, has_media=has_media)
     log.info(
         "TaskClassifier | session=%s | %s",
         session_id, _decision.rationale
     )
 
-    # ── Swarm activation ─────────────────────────────────────────────────────
-    if _decision.use_swarm:
+    # ── Fetch Unified Memory Context ──────────────────────────────────────────
+    _original_message = message
+    try:
+        from core.memory import get_memory
+        mem = get_memory()
+        context_block = await mem.build_context_block(session_id)
+        if context_block:
+            message = f"{context_block}\n\n[NEW USER MESSAGE]\n{message}"
+    except Exception as e:
+        log.warning("Failed to inject memory context: %s", e)
+
+    # ── Explicit Swarm Override (Phase 3) ────────────────────────────────────
+    # NEVER trigger a swarm if we are already inside a sub-agent!
+    if _decision.use_swarm and ":swarm:" not in session_id:
         log.info("Swarm activated | session=%s | type=%s", session_id, _decision.task_type)
         try:
             from core.swarm import run_swarm
@@ -84,8 +101,14 @@ async def process_message(
                 from core.memory import get_memory
                 import asyncio
                 mem = get_memory()
-                asyncio.ensure_future(mem.add_turn(session_id, "user", message))
-                asyncio.ensure_future(mem.add_turn(session_id, "assistant", result))
+                asyncio.ensure_future(mem.add_turn(
+                    session_id, "user", _original_message,
+                    provider=None, model=None
+                ))
+                asyncio.ensure_future(mem.add_turn(
+                    session_id, "assistant", result,
+                    provider=None, model=None
+                ))
             except Exception:
                 pass
             return result
@@ -113,6 +136,22 @@ async def process_message(
     )
 
     content = response.content
+
+    try:
+        from core.memory import get_memory
+        import asyncio
+        mem = get_memory()
+        asyncio.ensure_future(mem.add_turn(
+            session_id, "user", _original_message,
+            provider=None, model=None
+        ))
+        asyncio.ensure_future(mem.add_turn(
+            session_id, "assistant", content,
+            provider=response.provider.value if hasattr(response, 'provider') else None,
+            model=response.model_name if hasattr(response, 'model_name') else None
+        ))
+    except Exception as e:
+        log.warning("Failed to save memory: %s", e)
 
     # Professional and minimalistic footer
     provider_name = response.provider.value.capitalize()
@@ -172,10 +211,20 @@ def _build_capability_response() -> str:
 
 
 async def clear_memory(session_id: str) -> None:
-    """Clear conversation history across ALL providers for this session."""
-    log.info("Clearing all provider memories | session=%s", session_id)
-    await get_router().clear_all_memory(session_id)
-    log.info("All memories cleared | session=%s", session_id)
+    """
+    Completely clear all conversation history for a session.
+    Clears both the in-memory provider agent state AND the persistent UnifiedMemory database.
+    """
+    # 1. Clear in-memory model router state
+    router = get_router()
+    await router.clear_all_memory(session_id)
+    
+    # 2. Clear persistent UnifiedMemory (SQLite/PostgreSQL)
+    from core.memory import get_memory
+    mem = get_memory()
+    await mem.clear_session(session_id)
+    
+    log.info("Memory fully cleared | session=%s", session_id)
 
 
 async def get_status() -> dict:

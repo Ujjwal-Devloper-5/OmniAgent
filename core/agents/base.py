@@ -232,6 +232,7 @@ class BaseAgent(ABC):
                 "tool_calls that do not have a corresponding ToolMessage",
                 "AIMessages with tool_calls",
                 "ToolMessage",
+                "invalid tool call",
             ]
         )
 

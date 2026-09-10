@@ -47,11 +47,18 @@ _MAX_RECENT_TURNS = 20
 _session_locks: dict[str, asyncio.Lock] = {}
 
 
+_MAX_SESSION_LOCKS = 1000
+
 def _get_session_lock(session_id: str) -> asyncio.Lock:
+    """Get or create an asyncio.Lock for a session, with LRU eviction to prevent unbounded growth."""
     if session_id not in _session_locks:
+        if len(_session_locks) >= _MAX_SESSION_LOCKS:
+            # Evict the oldest 10% of locks
+            to_remove = list(_session_locks.keys())[:_MAX_SESSION_LOCKS // 10]
+            for key in to_remove:
+                del _session_locks[key]
         _session_locks[session_id] = asyncio.Lock()
     return _session_locks[session_id]
-
 
 async def _count_checkpoint_messages(session_id: str, db_path: str) -> int:
     """
@@ -59,6 +66,28 @@ async def _count_checkpoint_messages(session_id: str, db_path: str) -> int:
     Returns 0 if no checkpoint exists or if the table doesn't exist.
     Checks both exact thread_id AND thread_id LIKE 'session_id%' to catch provider suffixes.
     """
+    from config import settings
+    if settings.use_postgres:
+        try:
+            from core.memory import get_memory
+            mem = get_memory()
+            pool = await mem._get_pg_pool()
+            async with pool.acquire() as conn:
+                # Check if checkpoints table exists
+                exists = await conn.fetchval(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'checkpoints')"
+                )
+                if not exists:
+                    return 0
+                count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM writes WHERE thread_id LIKE $1",
+                    f"{session_id}%"
+                )
+                return count or 0
+        except Exception as exc:
+            log.debug("Context count failed (non-fatal): %s", exc)
+            return 0
+    
     try:
         async with aiosqlite.connect(db_path) as conn:
             # Check if checkpoints table exists
@@ -81,24 +110,10 @@ async def _count_checkpoint_messages(session_id: str, db_path: str) -> int:
 
 
 async def _get_unified_history(session_id: str, db_path: str, max_turns: int) -> list[dict]:
-    """Load the last N turns from UnifiedMemory (our reliable long-term store)."""
-    try:
-        async with aiosqlite.connect(db_path) as conn:
-            conn.row_factory = aiosqlite.Row
-            cursor = await conn.execute(
-                """
-                SELECT role, content, provider, model, ts
-                FROM unified_memory
-                WHERE session_id = ?
-                ORDER BY ts DESC
-                LIMIT ?
-                """,
-                (session_id, max_turns * 2),  # fetch double to have enough for both old+recent
-            )
-            rows = await cursor.fetchall()
-            return [dict(r) for r in reversed(rows)]
-    except Exception:
-        return []
+    """Fetch conversation history via UnifiedMemory (supports both SQLite and PostgreSQL)."""
+    from core.memory import get_memory
+    mem = get_memory()
+    return await mem.get_history(session_id, max_turns=max_turns * 2)
 
 
 async def _build_summary_via_llm(history_text: str) -> str:
@@ -144,6 +159,28 @@ async def _build_summary_via_llm(history_text: str) -> str:
 
 async def _wipe_checkpoint(session_id: str, db_path: str) -> None:
     """Delete all LangGraph checkpoint data for this session (across all providers)."""
+    from config import settings
+    if settings.use_postgres:
+        try:
+            from core.memory import get_memory
+            mem = get_memory()
+            pool = await mem._get_pg_pool()
+            async with pool.acquire() as conn:
+                tables = ["checkpoints", "writes", "checkpoint_writes", "checkpoint_blobs"]
+                for table in tables:
+                    exists = await conn.fetchval(
+                        "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = $1)", table
+                    )
+                    if exists:
+                        await conn.execute(
+                            f"DELETE FROM {table} WHERE thread_id LIKE $1",
+                            f"{session_id}%"
+                        )
+            return
+        except Exception as exc:
+            log.warning("Failed to wipe checkpoint for %s in PG: %s", session_id, exc)
+            return
+
     try:
         async with aiosqlite.connect(db_path) as conn:
             tables = ["checkpoints", "writes", "checkpoint_writes", "checkpoint_blobs"]

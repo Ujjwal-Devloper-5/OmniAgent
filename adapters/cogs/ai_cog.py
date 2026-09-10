@@ -152,7 +152,13 @@ class AICog(commands.Cog):
     async def slash_clear(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
         try:
-            await clear_memory(f"discord_{interaction.user.id}")
+            channel = interaction.channel
+            is_dm = hasattr(channel, 'type') and channel.type == discord.ChannelType.private
+            if is_dm:
+                session_id = f"discord_dm_{interaction.user.id}"
+            else:
+                session_id = f"discord_channel_{interaction.channel_id}"
+            await clear_memory(session_id)
             await interaction.followup.send("🗑️ Your conversation history has been cleared!", ephemeral=True)
         except Exception as exc:
             await interaction.followup.send(f"Failed to clear history: {exc}", ephemeral=True)

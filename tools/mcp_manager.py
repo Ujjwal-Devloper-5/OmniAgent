@@ -59,7 +59,18 @@ class MCPManager:
                 return None
             args_raw = os.getenv(f"{prefix}ARGS", "").strip()
             args = [a.strip() for a in args_raw.split(",") if a.strip()] if args_raw else []
-            return {"transport": "stdio", "command": command, "args": args, "env": dict(os.environ)}
+            
+            _SAFE_MCP_ENV_KEYS = {
+                "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE",
+                "TZ", "NODE_ENV", "NODE_PATH", "NPM_CONFIG_PREFIX",
+                "TMPDIR", "TEMP", "TMP",
+            }
+            
+            def _build_safe_env() -> dict[str, str]:
+                """Build a safe environment dict for MCP subprocesses (no secrets)."""
+                return {k: v for k, v in os.environ.items() if k in _SAFE_MCP_ENV_KEYS}
+                
+            return {"transport": "stdio", "command": command, "args": args, "env": _build_safe_env()}
         elif transport in ("http", "sse", "streamable_http"):
             url = os.getenv(f"{prefix}URL", "").strip()
             return {"transport": "streamable_http", "url": url} if url else None

@@ -34,6 +34,7 @@ from typing import Optional
 from langchain_core.tools import tool
 
 from core.logger import get_logger
+from config import settings
 
 log = get_logger(__name__)
 
@@ -43,14 +44,9 @@ log = get_logger(__name__)
 
 _SANDBOX_IMAGE         = "ubuntu:24.04"
 _CONTAINER_PREFIX      = "omniagent-sandbox"
-_CMD_TIMEOUT_SECONDS   = 300       # Per-command timeout (5 minutes)
-_CONTAINER_TTL_SECONDS = 7200      # Auto-kill container after 2 hours
 _MAX_OUTPUT_CHARS      = 6_000     # Truncate long outputs
-_MAX_CONTAINERS        = 5         # Max concurrent sandboxes
 
 # Resource constraints
-_MEMORY_LIMIT  = "1g"
-_CPU_QUOTA     = 100_000          # 100% of 1 CPU (out of 100000 per period)
 _PIDS_LIMIT    = 256              # Allow more processes for complex workloads
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -185,9 +181,9 @@ class _SandboxPool:
             "--rm",                            # Auto-remove when stopped
             "--name", container_name,
             # Resource limits
-            f"--memory={_MEMORY_LIMIT}",
-            f"--memory-swap={_MEMORY_LIMIT}",  # No swap
-            f"--cpu-quota={_CPU_QUOTA}",
+            f"--memory={settings.sandbox_memory_limit}",
+            f"--memory-swap={settings.sandbox_memory_limit}",  # No swap
+            f"--cpu-quota={settings.sandbox_cpu_quota}",
             f"--pids-limit={_PIDS_LIMIT}",
             # Security hardening — drop dangerous caps, keep minimal set
             "--security-opt", "no-new-privileges:true",
@@ -215,7 +211,7 @@ class _SandboxPool:
             "--volume", f"omniagent-ws-{session_key[:16]}:/workspace",
             # Keep alive
             _SANDBOX_IMAGE,
-            "sleep", str(_CONTAINER_TTL_SECONDS),
+            "sleep", str(settings.sandbox_ttl_seconds),
         ]
 
         proc = await asyncio.create_subprocess_exec(
@@ -263,7 +259,7 @@ class _SandboxPool:
             # Clean up expired containers
             to_remove = []
             for key, record in self._containers.items():
-                if record.age_seconds > _CONTAINER_TTL_SECONDS - 30:
+                if record.age_seconds > settings.sandbox_ttl_seconds - 30:
                     to_remove.append(key)
                     asyncio.create_task(self._kill_container(record.container_id))
             for key in to_remove:
@@ -279,7 +275,7 @@ class _SandboxPool:
                     self._containers.pop(session_key, None)
 
             # Enforce max container limit
-            if len(self._containers) >= _MAX_CONTAINERS:
+            if len(self._containers) >= settings.sandbox_max_concurrent:
                 # Kill the oldest container
                 oldest_key = min(
                     self._containers, key=lambda k: self._containers[k].created_at
@@ -322,7 +318,7 @@ class _SandboxPool:
         self,
         container_id: str,
         command: str,
-        timeout: int = _CMD_TIMEOUT_SECONDS,
+        timeout: int = settings.sandbox_cmd_timeout_seconds,
     ) -> tuple[str, str, int]:
         """
         Execute a command inside the container.
@@ -532,7 +528,7 @@ async def run_sandbox_command(command: str, session_id: str = "default") -> str:
 
     try:
         stdout, stderr, exit_code = await pool.exec_in(
-            container_id, command, timeout=_CMD_TIMEOUT_SECONDS
+            container_id, command, timeout=settings.sandbox_cmd_timeout_seconds
         )
     except Exception as exc:
         log.error("Sandbox exec failed: %s", exc)
@@ -576,9 +572,13 @@ async def write_sandbox_file(
     """
     import base64
 
-    # Sanitize filename — no path traversal
-    safe_name = re.sub(r"[^\w.\-]", "_", filename.replace("/", "_").replace("..", ""))
-    if not safe_name:
+    # Validate and normalize the path (keep forward slashes for subdirectory support)
+    # Prevent path traversal: reject absolute paths and .. components
+    if filename.startswith("/") or ".." in filename:
+        return f"❌ Invalid path: '{filename}'. Use relative paths without '..' components."
+    # Allow letters, digits, dots, hyphens, underscores, and forward slashes (for subdirs)
+    safe_path = re.sub(r"[^\w.\-/]", "_", filename)
+    if not safe_path:
         return "❌ Invalid filename."
 
     session_key = hashlib.sha256(session_id.encode()).hexdigest()[:16]
@@ -591,10 +591,15 @@ async def write_sandbox_file(
 
     # Encode content as base64 to avoid shell quoting nightmares
     b64_content = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    
+    import pathlib
+    parent_dir = str((pathlib.Path("/workspace") / safe_path).parent)
+    await pool.exec_in(container_id, f"mkdir -p '{parent_dir}'")
+
     cmd = (
         f"python3 -c \""
         f"import base64, pathlib; "
-        f"pathlib.Path('/workspace/{safe_name}').write_bytes("
+        f"pathlib.Path('/workspace/{safe_path}').write_bytes("
         f"base64.b64decode('{b64_content}'))\""
     )
 
@@ -603,8 +608,8 @@ async def write_sandbox_file(
     if exit_code == 0:
         byte_count = len(content.encode("utf-8"))
         return (
-            f"✅ Written `/workspace/{safe_name}` ({byte_count:,} bytes)\n"
-            f"Run it with: `run_sandbox_command('python3 {safe_name}', session_id=...)`"
+            f"✅ Written `/workspace/{safe_path}` ({byte_count:,} bytes)\n"
+            f"Run it with: `run_sandbox_command('python3 {safe_path}', session_id=...)`"
         )
     else:
         return f"❌ Failed to write file: {stderr.strip() or 'Unknown error'}"
@@ -627,8 +632,13 @@ async def read_sandbox_file(
     Returns:
         File contents (up to 8KB) or an error message.
     """
-    safe_name = re.sub(r"[^\w.\-]", "_", filename.replace("/", "_").replace("..", ""))
-    if not safe_name:
+    # Validate and normalize the path (keep forward slashes for subdirectory support)
+    # Prevent path traversal: reject absolute paths and .. components
+    if filename.startswith("/") or ".." in filename:
+        return f"❌ Invalid path: '{filename}'. Use relative paths without '..' components."
+    # Allow letters, digits, dots, hyphens, underscores, and forward slashes (for subdirs)
+    safe_path = re.sub(r"[^\w.\-/]", "_", filename)
+    if not safe_path:
         return "❌ Invalid filename."
 
     session_key = hashlib.sha256(session_id.encode()).hexdigest()[:16]
@@ -641,16 +651,16 @@ async def read_sandbox_file(
 
     stdout, stderr, exit_code = await pool.exec_in(
         container_id,
-        f"cat /workspace/{safe_name} 2>/dev/null | head -c 8192",
+        f"cat /workspace/{safe_path} 2>/dev/null | head -c 65536",
         timeout=10,
     )
 
     if exit_code == 0 and stdout:
-        return f"📄 `/workspace/{safe_name}`:\n```\n{stdout}\n```"
+        return f"📄 `/workspace/{safe_path}`:\n```\n{stdout}\n```"
     elif exit_code == 0 and not stdout:
-        return f"📄 `/workspace/{safe_name}` exists but is empty."
+        return f"📄 `/workspace/{safe_path}` exists but is empty."
     else:
-        return f"❌ File not found or not readable: `/workspace/{safe_name}`"
+        return f"❌ File not found or not readable: `/workspace/{safe_path}`"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -678,7 +688,7 @@ async def list_sandbox_files(session_id: str = "default") -> str:
 
     stdout, _, exit_code = await pool.exec_in(
         container_id,
-        "ls -lah /workspace/ 2>/dev/null || echo '(empty workspace)'",
+        "cd /workspace && find . -type f 2>/dev/null || echo '(empty workspace)'",
         timeout=10,
     )
     return f"📁 Sandbox workspace:\n```\n{stdout.strip()}\n```"

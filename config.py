@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     slack_app_token: Optional[str] = Field(default=None)   # xapp-... (for Socket Mode)
     slack_signing_secret: Optional[str] = Field(default=None)
 
+    # Owner Identity (secure, immutable ID-based authentication)
+    owner_discord_ids: set[str] = Field(default_factory=set, description="Comma-separated Discord user IDs with owner privileges")
+    owner_telegram_ids: set[str] = Field(default_factory=set, description="Comma-separated Telegram user IDs with owner privileges")
+    owner_slack_ids: set[str] = Field(default_factory=set, description="Comma-separated Slack user IDs with owner privileges")
+
     # ── Database ──────────────────────────────────────────────────────────────
     # ── Database (PostgreSQL — primary for production) ──────────────────────────
     database_url: Optional[str] = Field(
@@ -102,6 +107,22 @@ class Settings(BaseSettings):
     rate_limit_requests_per_minute: int = Field(default=20)
     rate_limit_tokens_per_day: int      = Field(default=200_000)
 
+    # ── Swarm Limits ──────────────────────────────────────────────────────────
+    swarm_max_steps: int                 = Field(default=5)
+    swarm_total_timeout_seconds: float   = Field(default=1800.0)
+    swarm_agent_timeout_seconds: float   = Field(default=900.0)
+    swarm_max_dynamic_agents: int        = Field(default=5)
+
+    # ── Sandbox Limits ────────────────────────────────────────────────────────
+    sandbox_cmd_timeout_seconds: int     = Field(default=300)
+    sandbox_ttl_seconds: int             = Field(default=7200)
+    sandbox_memory_limit: str            = Field(default="1g")
+    sandbox_cpu_quota: int               = Field(default=100_000)
+    sandbox_max_concurrent: int          = Field(default=5)
+
+    # ── Storage & Retention Limits (Janitor Daemon) ───────────────────────────
+    retention_reports_days: int          = Field(default=7, description="Days to keep generated files in /app/data/reports")
+    retention_sandbox_volumes_days: int  = Field(default=3, description="Days to keep idle isolated Docker volumes")
     # ── Bot Behaviour ─────────────────────────────────────────────────────────
     bot_name:             str = Field(default="OmniAgent")
     bot_prefix:           str = Field(default="!")
@@ -172,6 +193,13 @@ class Settings(BaseSettings):
     def ensure_log_dir(cls, v: str) -> str:
         Path(v).parent.mkdir(parents=True, exist_ok=True)
         return v
+
+    @field_validator("owner_discord_ids", "owner_telegram_ids", "owner_slack_ids", mode="before")
+    @classmethod
+    def _parse_id_set(cls, v):
+        if isinstance(v, str):
+            return {x.strip() for x in v.split(",") if x.strip()}
+        return v or set()
 
 
 # Singleton

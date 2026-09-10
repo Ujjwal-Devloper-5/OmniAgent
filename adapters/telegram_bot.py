@@ -286,13 +286,11 @@ async def _handle_ai_message(
         await update.message.reply_text(reason)
         return
 
-    # Maintain context for groups
+    # Maintain context for groups (Deque update only)
     chat_type = update.message.chat.type
-    context_str = ""
     if chat_type != 'private':
         history = _CHAT_HISTORY.get(update.message.chat_id, [])
-        if history:
-            context_str = "--- Channel Context (recent messages) ---\n" + "\n".join(history) + "\n--- End Context ---"
+        # Note: We no longer inject _CHAT_HISTORY into the prompt. UnifiedMemory in agent.py handles it.
 
     # God mode and language injection
     lang_instruction = (
@@ -305,7 +303,8 @@ async def _handle_ai_message(
 
     parts = [lang_instruction, user_info]
 
-    _is_owner = is_owner(username, user_name)
+    from core.user_brain import is_owner as _is_owner
+    _is_owner = _is_owner(str(update.effective_user.id), platform="telegram")
     if _is_owner:
         god_mode_instruction = (
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -328,8 +327,6 @@ async def _handle_ai_message(
         except Exception as e:
             log.warning(f"Failed to get brain context: {e}")
 
-    if context_str:
-        parts.append(context_str)
     parts.append(f"User's question/message: {text}")
 
     enriched_content = "\n\n".join(parts)
@@ -347,6 +344,7 @@ async def _handle_ai_message(
             has_media=has_media,
             image_data=image_data,
             image_mime=image_mime,
+            raw_message=text,
         )
 
         # Record token usage
@@ -354,14 +352,7 @@ async def _handle_ai_message(
             f"telegram_{user_id}", len(response) // 4
         )
         
-        # UnifiedMemory write-back
-        try:
-            mem = get_memory()
-            asyncio.create_task(mem.add_turn(session_id, "user", text))
-            clean_response = response.rsplit("\n\n_—", 1)[0] if "\n\n_—" in response else response
-            asyncio.create_task(mem.add_turn(session_id, "assistant", clean_response))
-        except Exception as e:
-            log.warning(f"Memory update failed: {e}")
+        # UnifiedMemory write-back is now handled by core/agent.py
 
         await renderer.finish(response, split_func=split_message)
 

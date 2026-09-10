@@ -22,11 +22,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from core.logger import get_logger
+from config import settings
 
 log = get_logger(__name__)
 
-MAX_STEPS = 5
-SWARM_TIMEOUT = 90.0  # seconds total
 AGENT_CHAR_CAP = 8000  # max chars per sub-agent output before synthesis
 
 
@@ -37,61 +36,45 @@ class SwarmContext:
     session_id: str
     platform: str
     scratchpad: dict[str, str] = field(default_factory=dict)
+    generated_files: list[str] = field(default_factory=list)
     steps_taken: int = 0
     start_time: float = field(default_factory=time.time)
 
     def budget_remaining(self) -> float:
-        return SWARM_TIMEOUT - (time.time() - self.start_time)
+        return settings.swarm_total_timeout_seconds - (time.time() - self.start_time)
 
     def is_over_budget(self) -> bool:
-        return self.steps_taken >= MAX_STEPS or self.budget_remaining() < 5.0
+        return self.steps_taken >= settings.swarm_max_steps or self.budget_remaining() < 5.0
 
 
-# Specialist agent prompts — each agent is highly focused
-_AGENT_PROMPTS: dict[str, str] = {
-    'ResearchAgent': (
-        "You are a deep research specialist. Your job is to gather comprehensive, "
-        "factual information using web_search and wikipedia_lookup tools. "
-        "Be thorough, cite sources when possible, and present findings clearly. "
-        "DO NOT write a final report — just gather and present raw research findings."
-    ),
-    'CoderAgent': (
-        "You are a senior software engineer. Write production-quality, well-commented code. "
-        "Use execute_python or run_sandbox_command to test your code. "
-        "Explain your implementation decisions concisely."
-    ),
-    'WriterAgent': (
-        "You are a professional technical writer. Structure content with clear headers, "
-        "bullet points, and logical flow. Create the final, polished output "
-        "that will be delivered to the user. Be comprehensive yet concise."
-    ),
-    'AnalystAgent': (
-        "You are a critical analyst. Analyze the provided information, identify key patterns, "
-        "extract insights, evaluate pros/cons, and structure findings clearly. "
-        "Focus on what matters most for the user's goal."
-    ),
-}
+# Dynamic Orchestrator Prompt
+_ORCHESTRATOR_PROMPT = """You are the OmniAgent Swarm Orchestrator. 
+Your job is to break down the USER REQUEST into a sequential plan of highly specialized AI agent roles.
+Each agent will run one after the other, passing their findings down the chain.
 
-# Routing rules: task keywords → agent plan
-_ROUTING_RULES: list[tuple[frozenset, list[str]]] = [
-    (frozenset({'research', 'report', 'pdf', 'comprehensive', 'deep dive', 'investigate', 'study', 'overview'}),
-     ['ResearchAgent', 'AnalystAgent', 'WriterAgent']),
-    (frozenset({'code', 'implement', 'build', 'fix', 'debug', 'function', 'script', 'program'}),
-     ['CoderAgent']),
-    (frozenset({'analyze', 'analysis', 'compare', 'evaluate', 'assess', 'review', 'pros', 'cons'}),
-     ['ResearchAgent', 'AnalystAgent', 'WriterAgent']),
-    (frozenset({'write', 'draft', 'create', 'generate', 'compose', 'summarize'}),
-     ['WriterAgent']),
+CRITICAL RULES:
+1. You MUST output ONLY a valid JSON array. Do not include markdown formatting or conversational text.
+2. The JSON array must contain objects with the following keys:
+   - "role" (string)
+   - "instructions" (string)
+   - "requires_qa" (boolean) - set to true if this step is complex and requires rigorous testing/review.
+   - "qa_instructions" (string, optional) - specific validation criteria if requires_qa is true.
+
+Example Output:
+[
+  {
+    "role": "DataScraper",
+    "instructions": "Use web_search to find recent US Treasury bond holder data. Extract exact figures.",
+    "requires_qa": false
+  },
+  {
+    "role": "PythonDeveloper",
+    "instructions": "Write python code to generate a PDF chart of the data provided by DataScraper.",
+    "requires_qa": true,
+    "qa_instructions": "Verify the code executes without errors and generates a valid PDF. Reject if the PDF is missing or broken."
+  }
 ]
-
-
-def _plan_from_rules(query: str) -> list[str]:
-    """Fast keyword-based routing. No LLM call needed — zero latency."""
-    q = query.lower()
-    for keywords, plan in _ROUTING_RULES:
-        if any(kw in q for kw in keywords):
-            return plan
-    return ['ResearchAgent', 'WriterAgent']  # default
+"""
 
 
 class SwarmSupervisor:
@@ -107,44 +90,130 @@ class SwarmSupervisor:
             platform=platform,
         )
 
-        plan = _plan_from_rules(query)
-        log.info("Swarm started | session=%s | plan=%s", session_id, plan)
+        from core.agent import process_message as _proc
+        from tools.upload_tool import get_upload_context, set_upload_context
+        import json
+        import re
 
-        for agent_name in plan:
-            if ctx.is_over_budget():
-                log.warning(
-                    "Swarm budget exhausted | session=%s | steps=%d | elapsed=%.1fs",
-                    session_id, ctx.steps_taken, time.time() - ctx.start_time
-                )
-                break
+        # Suppress platform uploads while internal agents are iterating
+        original_upload_ctx = get_upload_context()
+        if original_upload_ctx:
+            set_upload_context(original_upload_ctx.platform, original_upload_ctx.target_id, is_internal_swarm=True)
 
-            try:
-                result = await asyncio.wait_for(
-                    self._run_agent(agent_name, ctx),
-                    timeout=min(40.0, max(10.0, ctx.budget_remaining() - 5.0)),
-                )
-                ctx.scratchpad[agent_name] = result[:AGENT_CHAR_CAP]
-                ctx.steps_taken += 1
-                log.info(
-                    "Swarm step %d/%d complete | agent=%s | output_len=%d",
-                    ctx.steps_taken, MAX_STEPS, agent_name, len(result)
-                )
-            except asyncio.TimeoutError:
-                log.warning("Swarm agent %s timed out | session=%s", agent_name, session_id)
-                ctx.scratchpad[agent_name] = f"[{agent_name}: timed out]"
-                ctx.steps_taken += 1
-            except Exception as exc:
-                log.warning("Swarm agent %s failed | session=%s | err=%s", agent_name, session_id, exc)
-                ctx.scratchpad[agent_name] = f"[{agent_name}: failed — {exc}]"
-                ctx.steps_taken += 1
+        # 1. Ask Orchestrator for the plan
+        orchestrator_prompt = f"{_ORCHESTRATOR_PROMPT}\n\nUSER REQUEST: {query}"
+        try:
+            plan_json_str = await _proc(session_id + ":swarm:orchestrator", orchestrator_prompt, platform=platform)
+            # Extract JSON array
+            match = re.search(r'\[.*\]', plan_json_str, re.DOTALL)
+            raw_json = match.group(0) if match else plan_json_str
+            plan = json.loads(raw_json)
+            
+            # Enforce dynamic agent limits for safety and billing control
+            if len(plan) > settings.swarm_max_dynamic_agents:
+                log.warning("Orchestrator requested %d agents. Capping at %d.", len(plan), settings.swarm_max_dynamic_agents)
+                plan = plan[:settings.swarm_max_dynamic_agents]
+        except Exception as e:
+            log.error("Orchestrator failed to generate valid JSON plan: %s", e)
+            plan = [{"role": "Generalist", "instructions": "Complete the user request."}]
+
+        log.info("Swarm started | session=%s | dynamic_agents=%d", session_id, len(plan))
+
+        for agent_def in plan:
+            agent_name = agent_def.get("role", "Specialist").replace(" ", "")
+            base_instructions = agent_def.get("instructions", "Assist the user.")
+            requires_qa = agent_def.get("requires_qa", False)
+            qa_instructions = agent_def.get("qa_instructions", "Verify output is correct.")
+
+            max_retries = 3 if requires_qa else 1
+            feedback_context = ""
+
+            for attempt in range(max_retries):
+                files_checkpoint = len(ctx.generated_files)
+                if ctx.is_over_budget():
+                    log.warning(
+                        "Swarm budget exhausted | session=%s | steps=%d | elapsed=%.1fs",
+                        session_id, ctx.steps_taken, time.time() - ctx.start_time
+                    )
+                    break
+
+                try:
+                    current_instructions = f"{base_instructions}\n\n{feedback_context}" if feedback_context else base_instructions
+                    result = await asyncio.wait_for(
+                        self._run_agent(agent_name, current_instructions, ctx),
+                        timeout=min(settings.swarm_agent_timeout_seconds, max(10.0, ctx.budget_remaining() - 5.0)),
+                    )
+                    ctx.scratchpad[agent_name] = result[:AGENT_CHAR_CAP]
+                    ctx.steps_taken += 1
+                    
+                    # Intercept any generated files that were suppressed from upload
+                    draft_matches = re.findall(r'\[INTERNAL_DRAFT_READY:\s*(.*?)\]', result)
+                    for file_path in draft_matches:
+                        if file_path not in ctx.generated_files:
+                            ctx.generated_files.append(file_path)
+
+                    log.info(
+                        "Swarm step %d/%d complete | agent=%s | attempt=%d/%d | output_len=%d",
+                        ctx.steps_taken, settings.swarm_max_steps, agent_name, attempt + 1, max_retries, len(result),
+                    )
+
+                    if not requires_qa or attempt == max_retries - 1:
+                        break
+
+                    # Execute QA validation
+                    qa_prompt = (
+                        f"You are a strict QA Reviewer. Evaluate the following work output against these criteria.\n\n"
+                        f"QA CRITERIA:\n{qa_instructions}\n\n"
+                        f"WORK OUTPUT TO EVALUATE:\n{result}\n\n"
+                        f"RESPOND with your analysis first, then on the VERY LAST LINE output ONLY one of these two exact strings:\n"
+                        f"VERDICT: PASS\n"
+                        f"VERDICT: FAIL\n\n"
+                        f"Do not add anything after the verdict line."
+                    )
+                    
+                    qa_result = await asyncio.wait_for(
+                        _proc(f"{session_id}:swarm:qa_{agent_name}", qa_prompt, platform=platform),
+                        timeout=min(120.0, max(10.0, ctx.budget_remaining() - 5.0))
+                    )
+                    
+                    lines = qa_result.strip().split("\n")
+                    last_line = lines[-1].strip().upper() if lines else ""
+                    if last_line == "VERDICT: PASS":
+                        log.info("QA check passed for %s", agent_name)
+                        break
+                    
+                    # QA FAILED — rollback files from this attempt and retry
+                    ctx.generated_files = ctx.generated_files[:files_checkpoint]
+                    log.info("QA failed for %s attempt %d/%d, retrying", agent_name, attempt+1, max_retries)
+                    feedback_context += f"\n--- QA FEEDBACK (Attempt {attempt + 1}) ---\n{qa_result}\nPlease correct your previous output based on this feedback."
+
+                except asyncio.TimeoutError:
+                    log.warning("Swarm agent %s timed out | session=%s", agent_name, session_id)
+                    ctx.scratchpad[agent_name] = f"[{agent_name}: timed out]"
+                    ctx.steps_taken += 1
+                    break
+                except Exception as exc:
+                    log.warning("Swarm agent %s failed | session=%s | err=%s", agent_name, session_id, exc)
+                    ctx.scratchpad[agent_name] = f"[{agent_name}: failed — {exc}]"
+                    ctx.steps_taken += 1
+                    break
+
+        # Restore original upload context so we can deliver final files
+        if original_upload_ctx:
+            set_upload_context(original_upload_ctx.platform, original_upload_ctx.target_id, is_internal_swarm=False)
+
+        from tools.upload_tool import _deliver_file
+        import os
+        for final_file in ctx.generated_files:
+            if os.path.exists(final_file):
+                filename = os.path.basename(final_file)
+                await _deliver_file(final_file, filename, description=f"📎 Final QA-Approved Document: {filename}")
 
         return await self._synthesize(ctx)
 
-    async def _run_agent(self, agent_name: str, ctx: SwarmContext) -> str:
-        """Invoke a specialist agent with focused prompt + prior context."""
+    async def _run_agent(self, agent_name: str, instructions: str, ctx: SwarmContext) -> str:
+        """Invoke a dynamic specialist agent with its specific instructions + prior context."""
         from core.agent import process_message as _proc
-
-        specialist_prompt = _AGENT_PROMPTS.get(agent_name, _AGENT_PROMPTS['WriterAgent'])
 
         # Build prior work section for context handoff
         prior_sections = []
@@ -153,12 +222,13 @@ class SwarmSupervisor:
         prior_work = "\n\n".join(prior_sections)
 
         full_prompt = (
-            f"{specialist_prompt}\n\n"
+            f"You are a highly specialized AI agent. Your role is: {agent_name}\n"
+            f"Your specific instructions for this task are:\n{instructions}\n\n"
             f"USER REQUEST: {ctx.original_query}\n"
             + (f"\n--- PRIOR AGENT WORK (use as context) ---\n{prior_work}\n---" if prior_work else "")
         )
 
-        # Each sub-agent gets an isolated session ID
+        # Each sub-agent gets an isolated session ID to prevent context pollution
         agent_session = f"{ctx.session_id}:swarm:{agent_name.lower().replace('agent', '')}"
         return await _proc(agent_session, full_prompt, platform=ctx.platform)
 
@@ -192,18 +262,15 @@ class SwarmSupervisor:
         try:
             return await asyncio.wait_for(
                 _proc(synth_session, synthesis_prompt, platform=ctx.platform),
-                timeout=min(30.0, max(5.0, ctx.budget_remaining())),
+                timeout=min(settings.swarm_agent_timeout_seconds, max(5.0, ctx.budget_remaining())),
             )
         except asyncio.TimeoutError:
             log.warning("Swarm synthesis timed out | session=%s", ctx.session_id)
-            # Return WriterAgent output as best fallback
-            return ctx.scratchpad.get(
-                'WriterAgent',
-                list(ctx.scratchpad.values())[-1]
-            )
+            # Return the last agent's output as the best fallback
+            return list(ctx.scratchpad.values())[-1]
         except Exception as exc:
             log.warning("Swarm synthesis failed | session=%s | err=%s", ctx.session_id, exc)
-            return ctx.scratchpad.get('WriterAgent', list(ctx.scratchpad.values())[-1])
+            return list(ctx.scratchpad.values())[-1]
 
 
 _supervisor: Optional[SwarmSupervisor] = None
