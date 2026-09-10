@@ -12,7 +12,7 @@ Supported formats:
   - TXT/MD → passthrough with metadata
 """
 
-from smolagents import tool
+from langchain_core.tools import tool
 from tools.sandbox_tool import run_sandbox_command, write_sandbox_file
 import os
 

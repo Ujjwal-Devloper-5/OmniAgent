@@ -572,20 +572,28 @@ POSTGRES_PASSWORD=your_secure_password
 
 ---
 
-## 🧰 Built-in Tool Ecosystem
+## 🧰 Built-in Tool Ecosystem (30 Core Tools)
 
-```
+```text
 🌐 Web & Research          🖥️  Sandbox Execution        💾 Memory & Files
 ─────────────────────      ──────────────────────────   ──────────────────────
 web_search                 run_sandbox_command            remember_note
-wikipedia_lookup           execute_python                 recall_notes
-fetch_url                  write_sandbox_file             read_file
-get_weather                read_sandbox_file              write_file
-get_current_datetime       list_sandbox_files             list_files
-calculate
+wikipedia_lookup           spawn_background_process       recall_notes
+fetch_url                  manage_process                 forget_note
+get_weather                git_run                        read_file
+get_current_datetime                                      write_file
+                                                          list_files
+                                                          manage_file
+                                                          find_files
+
+💻 Elite Coding Suite      🌍 Browser Automation        📄 Document & System
+─────────────────────      ──────────────────────────   ──────────────────────
+view_file                  browser_act (Playwright)       extract_document
+edit_file                                                 system_status
+grep_search
 ```
 
-Plus everything from your MCP servers — automatically discovered at boot.
+Plus everything from your MCP servers — automatically discovered at boot and gracefully managed via a per-server circuit breaker.
 
 ---
 
@@ -664,7 +672,9 @@ ADMIN_API_SECRET=           # Set to enable dashboard at :8181
 # POSTGRES_PASSWORD=
 
 # ── MCP Servers ───────────────────────────────────────────────────────────
-MCP_SERVERS=filesystem,sequential_thinking,memory,puppeteer
+# Create an mcp.json file in the root directory (official MCP standard)
+# Example: {"mcpServers": {"memory": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"]}}}
+# (Legacy MCP_SERVERS env var is also supported but mcp.json is recommended)
 
 # ── Performance Tuning ────────────────────────────────────────────────────
 MODEL_FAILURE_THRESHOLD=3       # Failures before quarantine

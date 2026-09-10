@@ -5,7 +5,7 @@ Provides real-time system health metrics: CPU, RAM, disk, Docker,
 and OmniAgent-specific status (active sessions, sandbox containers).
 """
 
-from smolagents import tool
+from langchain_core.tools import tool
 import asyncio
 import os
 
