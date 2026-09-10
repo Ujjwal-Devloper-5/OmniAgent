@@ -9,7 +9,12 @@ from __future__ import annotations
 import ast
 import math
 import operator
+import sys
 from typing import Any
+
+# Allow large integer representations for factorial/power calculations
+if hasattr(sys, 'set_int_max_str_digits'):
+    sys.set_int_max_str_digits(100000)  # Allow up to 100k digit integers
 
 from langchain_core.tools import tool
 
@@ -146,8 +151,11 @@ def calculate(expression: str) -> str:
         result = _safe_eval(tree)
         # Format nicely
         if isinstance(result, float) and result == int(result) and abs(result) < 1e15:
-            return str(int(result))
-        return str(result)
+            result = int(result)
+        try:
+            return str(result)
+        except ValueError:
+            return f"{result:.6e}  (too large for exact display — {result.bit_length()} bits)"
     except ZeroDivisionError:
         return "Error: Division by zero."
     except (ValueError, NameError, TypeError, SyntaxError) as exc:

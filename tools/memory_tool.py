@@ -1,91 +1,153 @@
 """
-Memory Tools — OmniAgent v4
-══════════════════════════════
-Tools for the AI agent to save and recall persistent notes and facts.
-Notes survive restarts and are stored in the SQLite database.
+Session-Isolated Memory Tools — OmniAgent Phase 4
+════════════════════════════════════════════════════
+Persistent note storage per session using UnifiedMemory backend.
+Notes are completely isolated per session_id — no cross-user leakage.
 """
-
 from __future__ import annotations
 
 import json
-import time
-from pathlib import Path
-from typing import Optional
-
 from langchain_core.tools import tool
-
 from core.logger import get_logger
 
 log = get_logger(__name__)
 
-_NOTES_PATH = Path("data/notes.json")
-
-
-def _load_notes() -> dict:
-    """Load notes from disk."""
-    _NOTES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if _NOTES_PATH.exists():
-        try:
-            return json.loads(_NOTES_PATH.read_text())
-        except Exception:
-            return {}
-    return {}
-
-
-def _save_notes(notes: dict) -> None:
-    """Save notes to disk atomically."""
-    tmp = _NOTES_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(notes, indent=2, ensure_ascii=False))
-    tmp.replace(_NOTES_PATH)
+# Memory key prefix for notes stored in UnifiedMemory
+_NOTE_KEY_PREFIX = "__note__"
 
 
 @tool
-def remember_note(key: str, value: str) -> str:
+async def remember_note(
+    note: str,
+    tag: str = "general",
+    session_id: str = "default",
+) -> str:
     """
-    Save a persistent note or fact with a key. Notes survive bot restarts.
-    Use this to remember important information the user tells you to save.
-    Examples: remember_note('favorite_color', 'blue'), remember_note('server_ip', '192.168.1.100')
+    Save a note to persistent session memory for future reference.
+    
+    Notes persist across conversation turns within the same session.
+    Each note is tagged for easy retrieval.
+    
+    Args:
+        note:       The note content to remember
+        tag:        Category tag for organization (e.g. 'todo', 'fact', 'code')
+        session_id: Session identifier (notes are isolated per session)
+    
+    Returns:
+        Confirmation that the note was saved.
+    
+    Examples:
+        remember_note('User prefers Python over JavaScript', tag='preference')
+        remember_note('API key is abc123', tag='credential')  # use carefully
+        remember_note('TODO: refactor the login module', tag='todo')
     """
-    try:
-        notes = _load_notes()
-        notes[key] = {
-            "value": value,
-            "saved_at": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
-        }
-        _save_notes(notes)
-        return f"✅ Remembered: '{key}' = '{value}'"
-    except Exception as e:
-        return f"Error saving note: {e}"
+    from core.memory import get_memory
+    
+    mem = get_memory()
+    # Store as a special system turn in memory with a note marker
+    note_data = json.dumps({"tag": tag, "content": note})
+    await mem.add_turn(
+        session_id,
+        "system",
+        f"{_NOTE_KEY_PREFIX}{note_data}",
+    )
+    log.info("Note saved | session=%s tag=%s", session_id, tag)
+    return f"✅ Note saved (tag: {tag}): {note[:100]}"
 
 
 @tool
-def recall_notes(key: Optional[str] = None) -> str:
+async def recall_notes(
+    tag: str = "",
+    session_id: str = "default",
+    limit: int = 20,
+) -> str:
     """
-    Recall saved notes. If a key is provided, returns that specific note.
-    If no key is provided, returns ALL saved notes.
-    Use this when the user asks 'what do you remember about X?' or 'what did I tell you?'
+    Retrieve saved notes from session memory.
+    
+    Args:
+        tag:        Filter by tag (empty = return all notes)
+        session_id: Session identifier
+        limit:      Maximum number of notes to return (default: 20)
+    
+    Returns:
+        Formatted list of matching notes with their tags.
+    
+    Examples:
+        recall_notes()              # all notes
+        recall_notes(tag='todo')    # only TODO items
+        recall_notes(tag='fact', limit=5)  # last 5 facts
     """
-    try:
-        notes = _load_notes()
-        if not notes:
-            return "No notes saved yet."
-        if key:
-            if key in notes:
-                n = notes[key]
-                return f"📝 Note '{key}': {n['value']} (saved {n.get('saved_at', 'unknown')})"
-            else:
-                # Try fuzzy match
-                matches = [k for k in notes if key.lower() in k.lower()]
-                if matches:
-                    lines = [f"No exact match for '{key}', similar notes:"]
-                    for m in matches[:5]:
-                        lines.append(f"  • {m}: {notes[m]['value']}")
-                    return "\n".join(lines)
-                return f"No note found for key '{key}'."
-        else:
-            lines = [f"📝 All saved notes ({len(notes)} total):"]
-            for k, v in list(notes.items())[-20:]:  # Last 20
-                lines.append(f"  • {k}: {v['value']}")
-            return "\n".join(lines)
-    except Exception as e:
-        return f"Error recalling notes: {e}"
+    from core.memory import get_memory
+    
+    mem = get_memory()
+    history = await mem.get_history(session_id)
+    
+    notes: list[dict] = []
+    for turn in history:
+        content = turn.get("content", "")
+        if content.startswith(_NOTE_KEY_PREFIX):
+            try:
+                data = json.loads(content[len(_NOTE_KEY_PREFIX):])
+                if data.get("tag") == "__forgotten__":
+                    continue  # Skip forgotten notes
+                if not tag or data.get("tag") == tag:
+                    notes.append(data)
+            except (json.JSONDecodeError, KeyError):
+                pass
+    
+    # Return most recent first, capped at limit
+    notes = notes[-limit:]
+    notes.reverse()
+    
+    if not notes:
+        return f"📝 No notes found{' with tag: ' + tag if tag else ''}."
+    
+    lines = [f"📝 Found {len(notes)} note(s){' tagged ' + tag if tag else ''}:"]
+    for i, n in enumerate(notes, 1):
+        lines.append(f"  {i}. [{n['tag']}] {n['content']}")
+    return "\n".join(lines)
+
+
+@tool
+async def forget_note(
+    keyword: str,
+    session_id: str = "default",
+) -> str:
+    """
+    Mark a note for forgetting by keyword match.
+    
+    Because notes are stored in conversation history (immutable in many backends),
+    this adds a 'forget' marker for the matched note so recall_notes filters it out.
+    
+    Args:
+        keyword:    Text that must appear in the note content to forget it
+        session_id: Session identifier
+    
+    Returns:
+        Confirmation of how many notes were forgotten.
+    """
+    from core.memory import get_memory
+    
+    mem = get_memory()
+    history = await mem.get_history(session_id)
+    
+    forgotten = 0
+    for turn in history:
+        content = turn.get("content", "")
+        if content.startswith(_NOTE_KEY_PREFIX):
+            try:
+                data = json.loads(content[len(_NOTE_KEY_PREFIX):])
+                if keyword.lower() in data.get("content", "").lower():
+                    # Add a forget marker
+                    await mem.add_turn(
+                        session_id,
+                        "system",
+                        f"{_NOTE_KEY_PREFIX}{json.dumps({'tag': '__forgotten__', 'content': data['content']})}",
+                    )
+                    forgotten += 1
+            except (json.JSONDecodeError, KeyError):
+                pass
+    
+    if forgotten:
+        return f"🗑️ Forgot {forgotten} note(s) containing '{keyword}'."
+    return f"❌ No notes found containing '{keyword}'."
