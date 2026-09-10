@@ -54,30 +54,77 @@ class ModelEntry:
     tags: list[str]               # e.g. ["coding", "math", "general"]
     is_available: bool = False    # set at boot after provider availability check
     consecutive_failures: int = 0  # runtime health — incremented on each failure
+    # Phase 2 additions:
+    cost_input_per_m: float = 0.0
+    cost_output_per_m: float = 0.0
+    is_free_tier: bool = False
+    baseline_ttft_ms: int = 1000
+    complexity_min: int = 0
+    complexity_max: int = 10
 
     def compute_score(
         self,
         needs_tools: bool = False,
         needs_vision: bool = False,
+        routing_policy: str = "AUTO",
+        w_quality: float = 3.0,
+        w_tool: float = 2.0,
+        w_cost: float = 0.5,
+        w_latency: float = 0.3,
     ) -> float:
         """
-        Compute the routing score for this model given request requirements.
-
-        Higher is better.  Returns a very negative number if vision is
-        required and this model is blind (hard exclusion via scoring).
+        Multi-objective Pareto score. Higher = better.
+        
+        AUTO:    balanced quality / speed / cost
+        ECO:     free/local models get +15 bonus, paid models penalized
+        SPEED:   latency-weighted heavily (w_latency *3)
+        QUALITY: quality-weighted heavily (w_quality *2), ignore cost
+        OFFLINE: only local models — paid models get -999 penalty
         """
-        base: float = self.intelligence * 3.0 + self.speed * 1.0
+        # Apply policy overrides
+        if routing_policy == "ECO":
+            w_quality = 2.0
+            w_cost = 3.0
+            w_latency = 0.5
+        elif routing_policy == "SPEED":
+            w_quality = 1.5
+            w_cost = 0.2
+            w_latency = 3.0
+        elif routing_policy == "QUALITY":
+            w_quality = 6.0
+            w_cost = 0.0
+            w_latency = 0.1
+        elif routing_policy == "OFFLINE":
+            if self.provider != "ollama":
+                return -999.0
+            w_quality = 2.0
+            w_cost = 0.0
+            w_latency = 1.0
+
+        base: float = self.intelligence * w_quality + self.speed * 1.0
 
         if needs_tools:
-            base += self.tool_reliability * 2.0
+            base += self.tool_reliability * w_tool
 
         if needs_vision:
-            # Hard bonus/penalty: vision models win decisively, blind models lose
             base += 5.0 if self.vision else -100.0
 
-        # Health penalty: each consecutive failure costs 20 points, capped at 100
+        # Cost penalty: normalize cost per million tokens to a 0-10 scale
+        # (0 cost = no penalty, $15/M = -7.5 penalty)
+        avg_cost = (self.cost_input_per_m + self.cost_output_per_m) / 2.0
+        cost_penalty = avg_cost * w_cost
+
+        # Latency penalty: normalize to 0-3 scale (200ms=0, 1500ms=max)
+        latency_norm = max(0.0, (self.baseline_ttft_ms - 200) / 1300.0) * 3.0
+        latency_penalty = latency_norm * w_latency
+
+        # Free tier bonus (ECO and AUTO modes)
+        free_bonus = 2.0 if (self.is_free_tier and routing_policy in ("ECO", "AUTO")) else 0.0
+
+        # Health penalty: each failure costs 20 points, capped at 100
         health_penalty = min(100, self.consecutive_failures * 20)
-        return base - health_penalty
+
+        return base + free_bonus - cost_penalty - latency_penalty - health_penalty
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -137,6 +184,12 @@ class ModelRegistry:
                     vision=bool(entry["vision"]),
                     context_window=int(entry["context_window"]),
                     tags=[t.lower() for t in entry.get("tags", [])],
+                    cost_input_per_m=float(entry.get("cost_input_per_m", 0.0)),
+                    cost_output_per_m=float(entry.get("cost_output_per_m", 0.0)),
+                    is_free_tier=bool(entry.get("is_free_tier", False)),
+                    baseline_ttft_ms=int(entry.get("baseline_ttft_ms", 1000)),
+                    complexity_min=int(entry.get("complexity_min", 0)),
+                    complexity_max=int(entry.get("complexity_max", 10)),
                 )
                 self._models[model.id] = model
                 loaded += 1
@@ -206,6 +259,7 @@ class ModelRegistry:
                         context_window=32000,
                         tags=["general", "quick"] + (["vision"] if is_vision else []),
                         is_available=True,  # it's installed, so it IS available
+                        is_free_tier=True,
                     )
                     self._models[model_name] = entry
                     new_count += 1
@@ -266,6 +320,7 @@ class ModelRegistry:
         task_type: str,
         needs_vision: bool = False,
         needs_tools: bool = False,
+        routing_policy: str = "AUTO",
     ) -> Optional[ModelEntry]:
         """
         Return the single best-scoring available model for this request.
@@ -286,13 +341,14 @@ class ModelRegistry:
             key=lambda m: m.compute_score(
                 needs_tools=needs_tools,
                 needs_vision=needs_vision,
+                routing_policy=routing_policy,
             ),
         )
         log.debug(
             "ModelRegistry.select_model | task=%s vision=%s tools=%s → %s (score=%.1f)",
             task_type, needs_vision, needs_tools,
             best.id,
-            best.compute_score(needs_tools=needs_tools, needs_vision=needs_vision),
+            best.compute_score(needs_tools=needs_tools, needs_vision=needs_vision, routing_policy=routing_policy),
         )
         return best
 
@@ -301,6 +357,7 @@ class ModelRegistry:
         task_type: str,
         needs_vision: bool = False,
         needs_tools: bool = False,
+        routing_policy: str = "AUTO",
     ) -> list[ModelEntry]:
         """
         Return ALL eligible models sorted by score descending.
@@ -314,6 +371,7 @@ class ModelRegistry:
             key=lambda m: m.compute_score(
                 needs_tools=needs_tools,
                 needs_vision=needs_vision,
+                routing_policy=routing_policy,
             ),
             reverse=True,
         )

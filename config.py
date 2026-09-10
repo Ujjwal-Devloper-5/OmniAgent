@@ -129,6 +129,10 @@ class Settings(BaseSettings):
     max_history_messages: int = Field(default=50)
 
     # ── Multi-Agent Routing ───────────────────────────────────────────────────
+    routing_policy: str = Field(
+        default="AUTO",
+        description="Routing policy: AUTO (Pareto), ECO (free/local only), SPEED (lowest latency), QUALITY (best model), OFFLINE (Ollama only)",
+    )
     default_provider:  str = Field(default="auto")
     coding_provider:   str = Field(default="auto")
     creative_provider: str = Field(default="auto")
@@ -181,6 +185,15 @@ class Settings(BaseSettings):
         if v.upper() not in valid:
             raise ValueError(f"log_level must be one of {valid}")
         return v.upper()
+
+    @field_validator("routing_policy")
+    @classmethod
+    def validate_routing_policy(cls, v: str) -> str:
+        allowed = {"AUTO", "ECO", "SPEED", "QUALITY", "OFFLINE"}
+        v = v.upper().strip()
+        if v not in allowed:
+            raise ValueError(f"routing_policy must be one of {allowed}, got '{v}'")
+        return v
 
     @field_validator("db_path")
     @classmethod

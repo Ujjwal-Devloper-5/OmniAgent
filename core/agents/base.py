@@ -190,6 +190,7 @@ class BaseAgent(ABC):
         needs_vision: bool = False,
         image_data: bytes | None = None,
         image_mime: str = "image/jpeg",
+        preferred_model: str | None = None,
     ) -> AgentResponse:
         """Process a message and return an AgentResponse."""
 

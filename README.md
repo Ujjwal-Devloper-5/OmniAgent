@@ -375,20 +375,64 @@ MCP server subprocesses receive only a minimal environment (`PATH`, `HOME`, `LAN
 
 ---
 
-## 🎯 Dynamic Model Registry
+## 🎯 Intelligent Model Routing (Pareto Router)
 
-OmniAgent scores every model mathematically and picks the best one per task. No guesswork.
+OmniAgent uses a **multi-objective Pareto scoring** engine to route every message to the optimal model. The registry knows the cost, latency, quality, and capabilities of every model and picks the mathematically best one per task.
 
-### Scoring Formula
+### Pareto Scoring Formula
 
 ```
-final_score = intelligence × 3.0
-            + speed × 1.0
-            + tool_reliability × 2.0  (when task requires tool-calling)
-            + 5.0                      (vision bonus, when image attached)
-            - 100.0                    (hard penalty for blind models on vision tasks)
-            - (consecutive_failures × 20)  (health demotion on failures)
+score = (intelligence × w_quality)
+      + (speed × 1.0)
+      + (tool_reliability × w_tool)   ← weighted when tools needed
+      + free_tier_bonus               ← +2 for free models in AUTO/ECO
+      - (avg_cost_per_M × w_cost)     ← penalizes paid APIs
+      - (ttft_norm × w_latency)       ← penalizes high-latency models
+      - (consecutive_failures × 20)   ← health demotion on failures
+      ± 5.0 / -100.0                  ← vision hard bonus/penalty
 ```
+
+### Routing Policy Modes
+
+Set `ROUTING_POLICY` in your `.env` to change routing behavior without touching code:
+
+| Policy | Description | Best For |
+|---|---|---|
+| `AUTO` | Pareto-optimal: balances quality, cost, and latency | Default — recommended |
+| `ECO` | Free and local models only (Gemini free, Groq, OpenRouter free, Ollama) | Minimize API costs |
+| `SPEED` | Lowest TTFT first: Groq LPU → Gemini Flash → OpenRouter | Real-time chat feel |
+| `QUALITY` | Highest intelligence first: Claude → GPT-4o → Gemini Pro | Complex analysis |
+| `OFFLINE` | Strict local Ollama only — no internet required | Air-gapped environments |
+
+```env
+# .env
+ROUTING_POLICY=ECO   # Only use free/local models
+```
+
+### Two-Stage Fallback
+
+OmniAgent fails over at two levels:
+
+1. **Intra-provider** (model-level): `gemini-2.5-pro` hits a 429 → its score drops → `gemini-2.5-flash` takes over automatically. Other Gemini models remain healthy.
+2. **Cross-provider**: If all Gemini models fail → Groq → OpenRouter → Ollama.
+
+Failures are tracked per model ID, not per provider — so one bad model doesn't kill the whole provider.
+
+### Role-Specialized Swarm Routing
+
+Each swarm agent role gets its own routing policy:
+
+| Swarm Role | Policy | Rationale |
+|---|---|---|
+| `ResearchAgent`, `Scraper` | `SPEED` | Groq LPU at 200ms TTFT for fast data gathering |
+| `CoderAgent`, `Developer` | `AUTO` | Registry picks best coding model (e.g. `qwen2.5-coder:7b` locally) |
+| `QA Reviewer`, `Analyst` | `QUALITY` | Best available model for rigorous review |
+| `WriterAgent` | `AUTO` | Balanced creative output |
+| `Synthesizer` | `SPEED` | Final merge step — speed matters |
+
+### Dynamic Capability Detection
+
+`_PROVIDER_CAPS` is no longer a hardcoded static matrix. Ollama's capabilities are now **derived live** from the tags of installed models in the registry. If you install `qwen2.5-coder:7b`, Ollama automatically gains `coding` capability and starts receiving coding tasks.
 
 ### Adding Models to the Registry
 
@@ -403,21 +447,17 @@ Add any model to `models.json`:
   "tool_reliability": 7,
   "vision": false,
   "context_window": 128000,
-  "tags": ["coding", "general", "research"]
+  "tags": ["coding", "general", "research"],
+  "cost_input_per_m": 0.0,
+  "cost_output_per_m": 0.0,
+  "is_free_tier": true,
+  "baseline_ttft_ms": 400,
+  "complexity_min": 0,
+  "complexity_max": 8
 }
 ```
 
-**Score guide:**
-
-| Score | Meaning |
-|---|---|
-| **9-10** | Frontier models (GPT-4o, Claude 3.5, Gemini Pro) |
-| **7-8** | Strong mid-tier (70B+, Gemini Flash) |
-| **5-6** | Capable small models (32B, 14B) |
-| **3-4** | 8B and smaller |
-| **1-2** | Tiny models (1-3B) — don't use for tools |
-
-Ollama models not listed are **auto-discovered** at boot with safe conservative defaults.
+Ollama models not listed are **auto-discovered** at boot with `is_free_tier=true` and safe conservative scores.
 
 ---
 

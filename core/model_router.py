@@ -70,7 +70,28 @@ _PLATFORM_LIMITS: dict[str, int] = {
 # Defines what each provider's API/tier can handle.
 # Ollama's vision capability is determined dynamically from installed models.
 
-_PROVIDER_CAPS: dict[ModelProvider, set[str]] = {
+
+def _get_provider_caps(provider: ModelProvider) -> set[str]:
+    """
+    Derive a provider's capabilities dynamically from the tags of all its
+    available models in the registry. Falls back to a safe minimal set if
+    the registry is empty or not yet initialised.
+    """
+    try:
+        reg = get_registry()
+        caps: set[str] = set()
+        for model in reg._models.values():
+            if model.provider == provider.value and model.is_available:
+                caps.update(model.tags)
+        if caps:
+            return caps
+    except Exception:
+        pass
+    # Fallback static minimums (safe, never empty)
+    return _PROVIDER_CAPS_FALLBACK.get(provider, {"text", "general"})
+
+_PROVIDER_CAPS_FALLBACK: dict[ModelProvider, set[str]] = {
+
     ModelProvider.OPENAI:     {"text", "vision", "coding", "math", "creative", "research", "analysis", "quick", "general"},
     ModelProvider.ANTHROPIC:  {"text", "vision", "creative", "analysis", "research", "coding", "math", "general", "quick"},
     ModelProvider.GEMINI:     {"text", "vision", "research", "math", "analysis", "coding", "creative", "general", "quick"},
@@ -346,7 +367,7 @@ class ModelRouter:
             if ollama_agent and hasattr(ollama_agent, "has_vision_capability"):
                 ollama_has_vision = ollama_agent.has_vision_capability()
                 if ollama_has_vision:
-                    _PROVIDER_CAPS[ModelProvider.OLLAMA] |= {"vision", "multimodal"}
+                    _PROVIDER_CAPS_FALLBACK[ModelProvider.OLLAMA] |= {"vision", "multimodal"}
                     log.info("Ollama: vision/multimodal capability detected (qwen2.5vl or similar)")
 
             self._boot_probe_done = True
@@ -372,7 +393,7 @@ class ModelRouter:
             vision_providers = [
                 p.value for p in ModelProvider
                 if self._cached_available.get(p) and
-                   (_PROVIDER_CAPS.get(p, set()) & _VISION_CAPABLE)
+                   (_get_provider_caps(p) & _VISION_CAPABLE)
             ]
 
             log.info(
@@ -447,7 +468,7 @@ class ModelRouter:
             # Split: vision-capable vs text-only
             vision_first = [
                 p for p in preferred
-                if p in available and (_PROVIDER_CAPS.get(p, set()) & _VISION_CAPABLE)
+                if p in available and (_get_provider_caps(p) & _VISION_CAPABLE)
             ]
             text_fallbacks = [
                 p for p in preferred
@@ -568,6 +589,9 @@ class ModelRouter:
         image_data: downloaded image bytes passed to vision-capable providers.
         image_mime: MIME type of the image (e.g. 'image/png').
         """
+        # Read current routing policy (may be temporarily overridden by process_message)
+        routing_policy = self._settings.routing_policy
+
         # Lazy boot probe on first message (subsequent calls use cache)
         if not self._boot_probe_done:
             await self.probe_all_providers()
@@ -580,13 +604,22 @@ class ModelRouter:
         # Use classifier capabilities if not overriding
         task_cap = decision.capabilities_needed
 
+
         needs_vision = has_media or task_type == TaskType.VISION
         available = self._get_available_providers()
         
+        if routing_policy == "OFFLINE":
+            available = [p for p in available if p == ModelProvider.OLLAMA]
+            if not available:
+                raise RuntimeError(
+                    "ROUTING_POLICY=OFFLINE but Ollama is not available. "
+                    "Start Ollama (ollama serve) and ensure models are pulled."
+                )
+
         # Capability filtering
         available = [
             p for p in available
-            if all(c in _PROVIDER_CAPS.get(p, set()) for c in task_cap)
+            if all(c in _get_provider_caps(p) for c in task_cap)
         ]
 
         log.info(
@@ -619,19 +652,19 @@ class ModelRouter:
 
         if force_provider:
             if force_provider in available:
-                priority = [force_provider]
-                for p in self._select_best_model_for_task(
-                    task_type, available, needs_vision, needs_tools=True
+                priority = [(force_provider, None)]
+                for p, m_id in self._select_best_model_for_task(
+                    task_type, available, needs_vision, needs_tools=True, routing_policy=routing_policy
                 ):
-                    if p not in priority:
-                        priority.append(p)
+                    if not any(x[0] == p for x in priority):
+                        priority.append((p, m_id))
             else:
                 log.warning(
                     "Forced provider %s not available, using auto-routing",
                     force_provider.value,
                 )
                 priority = self._select_best_model_for_task(
-                    task_type, available, needs_vision, needs_tools=True
+                    task_type, available, needs_vision, needs_tools=True, routing_policy=routing_policy
                 )
         else:
             # Registry-first: scored dynamic pool, falls back to _TASK_PREFERENCES
@@ -642,7 +675,55 @@ class ModelRouter:
         if not priority:
             raise RuntimeError("No valid providers in priority list.")
 
-        first_choice = priority[0]
+        # ── Apply routing_policy override (set temporarily by process_message) ──
+        # This allows per-call policy overrides (e.g. swarm role-based routing)
+        # without permanently changing the global settings.
+        # Note: priority entries may be (ModelProvider, model_id) tuples or bare ModelProvider.
+        # We normalise to tuples for reordering, then rebuild in original format.
+        _policy = routing_policy.upper()
+        if _policy != "AUTO":
+            # Normalise to (provider, model_id) tuples for uniform handling
+            _as_tuples: list[tuple[ModelProvider, object]] = [
+                (entry[0], entry[1]) if isinstance(entry, tuple) else (entry, None)
+                for entry in priority
+            ]
+            _prov_to_tuple: dict[ModelProvider, tuple] = {t[0]: t for t in _as_tuples}
+            _prov_set = {t[0] for t in _as_tuples}
+
+            if _policy == "SPEED":
+                # Groq LPU → lowest TTFT; fall through to others
+                _speed_order = [
+                    ModelProvider.GROQ, ModelProvider.GEMINI, ModelProvider.OPENROUTER,
+                    ModelProvider.OPENAI, ModelProvider.ANTHROPIC, ModelProvider.OLLAMA,
+                ]
+                _reordered_providers = [p for p in _speed_order if p in _prov_set] + \
+                                       [p for p in _prov_set if p not in _speed_order]
+            elif _policy == "QUALITY":
+                # Best reasoning models first
+                _quality_order = [
+                    ModelProvider.ANTHROPIC, ModelProvider.OPENAI, ModelProvider.GEMINI,
+                    ModelProvider.OPENROUTER, ModelProvider.GROQ, ModelProvider.OLLAMA,
+                ]
+                _reordered_providers = [p for p in _quality_order if p in _prov_set] + \
+                                       [p for p in _prov_set if p not in _quality_order]
+            elif _policy == "OFFLINE":
+                # Local only
+                _reordered_providers = [p for p in _prov_set if p == ModelProvider.OLLAMA]
+            elif _policy == "ECO":
+                # Free/local providers only; skip paid APIs
+                _eco_set = {ModelProvider.GROQ, ModelProvider.OPENROUTER, ModelProvider.OLLAMA, ModelProvider.GEMINI}
+                _reordered_providers = [p for p in _prov_set if p in _eco_set]
+            else:
+                _reordered_providers = list(_prov_set)
+
+            # Rebuild priority in original format
+            if priority and isinstance(priority[0], tuple):
+                priority = [_prov_to_tuple[p] for p in _reordered_providers if p in _prov_to_tuple]
+            else:
+                priority = [p for p in _reordered_providers]
+        # AUTO: leave priority as-is (registry already scored optimally)
+
+        first_choice = priority[0][0]
         last_error: Exception | None = None
 
         # Platform-aware system suffix (not stored in memory)
@@ -654,12 +735,12 @@ class ModelRouter:
             if char_limit else ""
         )
 
-        for i, provider in enumerate(priority):
+        for i, (provider, preferred_model_id) in enumerate(priority):
             agent = self._agents[provider]
             is_fallback = (i > 0)
 
             # Determine if this specific provider can handle vision
-            provider_caps = _PROVIDER_CAPS.get(provider, set())
+            provider_caps = _get_provider_caps(provider)
             effective_vision = needs_vision and bool(provider_caps & _VISION_CAPABLE)
 
             log.info(
@@ -679,6 +760,7 @@ class ModelRouter:
                     needs_vision=effective_vision,
                     image_data=image_data if effective_vision else None,
                     image_mime=image_mime,
+                    preferred_model=preferred_model_id,
                 )
                 self._record_success(provider)
                 # Inform registry of success so it can reset health demotions
@@ -703,11 +785,19 @@ class ModelRouter:
             except Exception as exc:
                 log.error("✗ Provider %s failed: %s", provider.value, exc)
                 self._record_failure(provider)
+                
+                # Record failure at model level too, so the specific model is demoted
+                # while other models from the same provider may still be tried
+                try:
+                    get_registry().record_failure(preferred_model_id)
+                except Exception:
+                    pass
+                    
                 # Inform registry so it can score-demote the specific model
                 try:
                     # Best effort: find the model_id for this provider from registry
                     reg = get_registry()
-                    ranked = reg.get_ranked_list(task_type.value, needs_vision, True)
+                    ranked = reg.get_ranked_list(task_type.value, needs_vision, True, routing_policy=routing_policy)
                     for m in ranked:
                         if m.provider == provider.value:
                             reg.record_failure(m.id)
@@ -719,7 +809,7 @@ class ModelRouter:
 
         raise RuntimeError(
             f"All providers failed. Last error: {last_error}\n"
-            f"Tried: {[p.value for p in priority]}"
+            f"Tried: {[p[0].value for p, _ in priority]}"
         )
 
     # ── Memory management ─────────────────────────────────────────────────────
@@ -739,14 +829,14 @@ class ModelRouter:
         for provider, health in self._health.items():
             configured = self._cached_available.get(provider, False)
             currently_healthy = self._is_healthy(provider) and configured
-            caps = sorted(_PROVIDER_CAPS.get(provider, set()))
+            caps = sorted(_get_provider_caps(provider))
             report[provider.value] = {
                 "configured":           configured,
                 "healthy":              currently_healthy,
                 "consecutive_failures": health.failures,
                 "failure_threshold":    self._settings.model_failure_threshold,
                 "capabilities":         caps,
-                "has_vision":           bool(_PROVIDER_CAPS.get(provider, set()) & _VISION_CAPABLE),
+                "has_vision":           bool(_get_provider_caps(provider) & _VISION_CAPABLE),
             }
         return report
 

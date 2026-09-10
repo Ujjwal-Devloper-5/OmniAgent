@@ -1,5 +1,5 @@
 {
-  "_comment": "OmniAgent Model Registry — JSON format (PyYAML not installed). Each model: provider, intelligence (1-10), speed (1-10), tool_reliability (1-10), vision (bool), context_window, tags.",
+  "_comment": "OmniAgent Model Registry \u2014 JSON format (PyYAML not installed). Each model: provider, intelligence (1-10), speed (1-10), tool_reliability (1-10), vision (bool), context_window, tags. Phase 2: cost_input_per_m, cost_output_per_m, is_free_tier, baseline_ttft_ms, complexity_min, complexity_max.",
   "models": [
     {
       "id": "gemini-2.5-flash",
@@ -9,7 +9,21 @@
       "tool_reliability": 9,
       "vision": true,
       "context_window": 1000000,
-      "tags": ["coding", "math", "research", "analysis", "vision", "general", "quick"]
+      "tags": [
+        "coding",
+        "math",
+        "research",
+        "analysis",
+        "vision",
+        "general",
+        "quick"
+      ],
+      "cost_input_per_m": 0.075,
+      "cost_output_per_m": 0.3,
+      "is_free_tier": true,
+      "baseline_ttft_ms": 600,
+      "complexity_min": 0,
+      "complexity_max": 9
     },
     {
       "id": "gemini-2.5-pro",
@@ -19,7 +33,21 @@
       "tool_reliability": 9,
       "vision": true,
       "context_window": 2000000,
-      "tags": ["coding", "math", "research", "analysis", "vision", "creative", "general"]
+      "tags": [
+        "coding",
+        "math",
+        "research",
+        "analysis",
+        "vision",
+        "creative",
+        "general"
+      ],
+      "cost_input_per_m": 1.25,
+      "cost_output_per_m": 10.0,
+      "is_free_tier": false,
+      "baseline_ttft_ms": 1200,
+      "complexity_min": 3,
+      "complexity_max": 10
     },
     {
       "id": "claude-sonnet-4-5",
@@ -29,7 +57,20 @@
       "tool_reliability": 10,
       "vision": true,
       "context_window": 200000,
-      "tags": ["coding", "creative", "analysis", "research", "vision", "general"]
+      "tags": [
+        "coding",
+        "creative",
+        "analysis",
+        "research",
+        "vision",
+        "general"
+      ],
+      "cost_input_per_m": 3.0,
+      "cost_output_per_m": 15.0,
+      "is_free_tier": false,
+      "baseline_ttft_ms": 800,
+      "complexity_min": 2,
+      "complexity_max": 10
     },
     {
       "id": "claude-haiku-4-5",
@@ -39,7 +80,17 @@
       "tool_reliability": 9,
       "vision": true,
       "context_window": 200000,
-      "tags": ["quick", "general", "creative"]
+      "tags": [
+        "quick",
+        "general",
+        "creative"
+      ],
+      "cost_input_per_m": 0.25,
+      "cost_output_per_m": 1.25,
+      "is_free_tier": false,
+      "baseline_ttft_ms": 350,
+      "complexity_min": 0,
+      "complexity_max": 7
     },
     {
       "id": "gpt-4o",
@@ -49,7 +100,20 @@
       "tool_reliability": 10,
       "vision": true,
       "context_window": 128000,
-      "tags": ["coding", "math", "analysis", "research", "vision", "general"]
+      "tags": [
+        "coding",
+        "math",
+        "analysis",
+        "research",
+        "vision",
+        "general"
+      ],
+      "cost_input_per_m": 2.5,
+      "cost_output_per_m": 10.0,
+      "is_free_tier": false,
+      "baseline_ttft_ms": 700,
+      "complexity_min": 2,
+      "complexity_max": 10
     },
     {
       "id": "gpt-4o-mini",
@@ -59,7 +123,17 @@
       "tool_reliability": 9,
       "vision": true,
       "context_window": 128000,
-      "tags": ["quick", "general", "coding"]
+      "tags": [
+        "quick",
+        "general",
+        "coding"
+      ],
+      "cost_input_per_m": 0.15,
+      "cost_output_per_m": 0.6,
+      "is_free_tier": false,
+      "baseline_ttft_ms": 400,
+      "complexity_min": 0,
+      "complexity_max": 7
     },
     {
       "id": "llama-3.3-70b-versatile",
@@ -69,7 +143,18 @@
       "tool_reliability": 7,
       "vision": false,
       "context_window": 128000,
-      "tags": ["general", "research", "coding", "quick"]
+      "tags": [
+        "general",
+        "research",
+        "coding",
+        "quick"
+      ],
+      "cost_input_per_m": 0.0,
+      "cost_output_per_m": 0.0,
+      "is_free_tier": true,
+      "baseline_ttft_ms": 200,
+      "complexity_min": 0,
+      "complexity_max": 8
     },
     {
       "id": "qwen-qwq-32b",
@@ -79,7 +164,18 @@
       "tool_reliability": 7,
       "vision": false,
       "context_window": 128000,
-      "tags": ["math", "coding", "analysis", "research"]
+      "tags": [
+        "math",
+        "coding",
+        "analysis",
+        "research"
+      ],
+      "cost_input_per_m": 0.0,
+      "cost_output_per_m": 0.0,
+      "is_free_tier": true,
+      "baseline_ttft_ms": 250,
+      "complexity_min": 2,
+      "complexity_max": 9
     },
     {
       "id": "cohere/command-r-plus",
@@ -89,7 +185,17 @@
       "tool_reliability": 6,
       "vision": false,
       "context_window": 128000,
-      "tags": ["general", "research", "creative"]
+      "tags": [
+        "general",
+        "research",
+        "creative"
+      ],
+      "cost_input_per_m": 0.0,
+      "cost_output_per_m": 0.0,
+      "is_free_tier": true,
+      "baseline_ttft_ms": 500,
+      "complexity_min": 0,
+      "complexity_max": 7
     },
     {
       "id": "meta-llama/llama-3.1-8b-instruct:free",
@@ -99,7 +205,16 @@
       "tool_reliability": 3,
       "vision": false,
       "context_window": 128000,
-      "tags": ["quick", "general"]
+      "tags": [
+        "quick",
+        "general"
+      ],
+      "cost_input_per_m": 0.0,
+      "cost_output_per_m": 0.0,
+      "is_free_tier": true,
+      "baseline_ttft_ms": 300,
+      "complexity_min": 0,
+      "complexity_max": 5
     },
     {
       "id": "qwen2.5-coder:7b",
@@ -109,7 +224,15 @@
       "tool_reliability": 6,
       "vision": false,
       "context_window": 32000,
-      "tags": ["coding"]
+      "tags": [
+        "coding"
+      ],
+      "cost_input_per_m": 0.0,
+      "cost_output_per_m": 0.0,
+      "is_free_tier": true,
+      "baseline_ttft_ms": 400,
+      "complexity_min": 0,
+      "complexity_max": 7
     },
     {
       "id": "qwen2.5vl:3b",
@@ -119,7 +242,16 @@
       "tool_reliability": 4,
       "vision": true,
       "context_window": 32000,
-      "tags": ["vision", "quick"]
+      "tags": [
+        "vision",
+        "quick"
+      ],
+      "cost_input_per_m": 0.0,
+      "cost_output_per_m": 0.0,
+      "is_free_tier": true,
+      "baseline_ttft_ms": 300,
+      "complexity_min": 0,
+      "complexity_max": 5
     },
     {
       "id": "gemma3:12b",
@@ -129,7 +261,18 @@
       "tool_reliability": 6,
       "vision": true,
       "context_window": 128000,
-      "tags": ["general", "vision", "coding", "research"]
+      "tags": [
+        "general",
+        "vision",
+        "coding",
+        "research"
+      ],
+      "cost_input_per_m": 0.0,
+      "cost_output_per_m": 0.0,
+      "is_free_tier": true,
+      "baseline_ttft_ms": 500,
+      "complexity_min": 0,
+      "complexity_max": 7
     },
     {
       "id": "qwen3:8b",
@@ -139,7 +282,16 @@
       "tool_reliability": 3,
       "vision": false,
       "context_window": 32000,
-      "tags": ["quick", "general"]
+      "tags": [
+        "quick",
+        "general"
+      ],
+      "cost_input_per_m": 0.0,
+      "cost_output_per_m": 0.0,
+      "is_free_tier": true,
+      "baseline_ttft_ms": 350,
+      "complexity_min": 0,
+      "complexity_max": 6
     },
     {
       "id": "qwen3:4b",
@@ -149,7 +301,15 @@
       "tool_reliability": 2,
       "vision": false,
       "context_window": 32000,
-      "tags": ["quick"]
+      "tags": [
+        "quick"
+      ],
+      "cost_input_per_m": 0.0,
+      "cost_output_per_m": 0.0,
+      "is_free_tier": true,
+      "baseline_ttft_ms": 250,
+      "complexity_min": 0,
+      "complexity_max": 4
     },
     {
       "id": "deepseek-r1:1.5b",
@@ -159,7 +319,16 @@
       "tool_reliability": 2,
       "vision": false,
       "context_window": 32000,
-      "tags": ["math", "quick"]
+      "tags": [
+        "math",
+        "quick"
+      ],
+      "cost_input_per_m": 0.0,
+      "cost_output_per_m": 0.0,
+      "is_free_tier": true,
+      "baseline_ttft_ms": 200,
+      "complexity_min": 0,
+      "complexity_max": 4
     },
     {
       "id": "llama3.2:3b",
@@ -169,7 +338,16 @@
       "tool_reliability": 3,
       "vision": false,
       "context_window": 128000,
-      "tags": ["quick", "general"]
+      "tags": [
+        "quick",
+        "general"
+      ],
+      "cost_input_per_m": 0.0,
+      "cost_output_per_m": 0.0,
+      "is_free_tier": true,
+      "baseline_ttft_ms": 200,
+      "complexity_min": 0,
+      "complexity_max": 4
     }
   ]
 }

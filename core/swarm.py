@@ -29,6 +29,46 @@ log = get_logger(__name__)
 AGENT_CHAR_CAP = 8000  # max chars per sub-agent output before synthesis
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Swarm Role → Model Preference Mapping
+# Maps role keywords to routing hints for model selection
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Maps lowercase role name substrings → (routing_policy, task_type_hint)
+# routing_policy: which policy to use when routing this role's messages
+# task_type_hint: preferred TaskType for this role
+_ROLE_ROUTING: list[tuple[str, str, str]] = [
+    # (role_keyword_substring, routing_policy, task_type_hint)
+    ("research",     "SPEED",   "research"),   # Groq LPU → fast gathering
+    ("scrape",       "SPEED",   "research"),
+    ("gather",       "SPEED",   "research"),
+    ("coder",        "AUTO",    "coding"),      # Registry picks best coding model
+    ("developer",    "AUTO",    "coding"),
+    ("programmer",   "AUTO",    "coding"),
+    ("code",         "AUTO",    "coding"),
+    ("qa",           "QUALITY", "analysis"),   # Best available model for review
+    ("reviewer",     "QUALITY", "analysis"),
+    ("validator",    "QUALITY", "analysis"),
+    ("analyst",      "QUALITY", "analysis"),
+    ("writer",       "AUTO",    "creative"),
+    ("synthesizer",  "SPEED",   "general"),    # Final merge — speed matters
+    ("orchestrator", "QUALITY", "analysis"),
+]
+
+
+def _get_role_routing(role: str) -> tuple[str, str]:
+    """
+    Given a swarm role name, return (routing_policy, task_type_hint).
+    Matches by substring of the role name (case-insensitive).
+    Defaults to AUTO/general if no match found.
+    """
+    role_lower = role.lower()
+    for keyword, policy, task_hint in _ROLE_ROUTING:
+        if keyword in role_lower:
+            return policy, task_hint
+    return "AUTO", "general"
+
+
 @dataclass
 class SwarmContext:
     """Shared scratchpad passed between swarm agents."""
@@ -125,6 +165,13 @@ class SwarmSupervisor:
             requires_qa = agent_def.get("requires_qa", False)
             qa_instructions = agent_def.get("qa_instructions", "Verify output is correct.")
 
+            # Determine role-appropriate routing policy and task type
+            role_policy, role_task_type = _get_role_routing(agent_name)
+            log.info(
+                "Swarm role=%s → policy=%s task=%s",
+                agent_name, role_policy, role_task_type,
+            )
+
             max_retries = 3 if requires_qa else 1
             feedback_context = ""
 
@@ -140,7 +187,7 @@ class SwarmSupervisor:
                 try:
                     current_instructions = f"{base_instructions}\n\n{feedback_context}" if feedback_context else base_instructions
                     result = await asyncio.wait_for(
-                        self._run_agent(agent_name, current_instructions, ctx),
+                        self._run_agent(agent_name, current_instructions, ctx, routing_policy=role_policy),
                         timeout=min(settings.swarm_agent_timeout_seconds, max(10.0, ctx.budget_remaining() - 5.0)),
                     )
                     ctx.scratchpad[agent_name] = result[:AGENT_CHAR_CAP]
@@ -172,7 +219,12 @@ class SwarmSupervisor:
                     )
                     
                     qa_result = await asyncio.wait_for(
-                        _proc(f"{session_id}:swarm:qa_{agent_name}", qa_prompt, platform=platform),
+                        _proc(
+                            f"{session_id}:swarm:qa_{agent_name}",
+                            qa_prompt,
+                            platform=platform,
+                            routing_policy_override="QUALITY",  # QA always uses best model
+                        ),
                         timeout=min(120.0, max(10.0, ctx.budget_remaining() - 5.0))
                     )
                     
@@ -211,7 +263,13 @@ class SwarmSupervisor:
 
         return await self._synthesize(ctx)
 
-    async def _run_agent(self, agent_name: str, instructions: str, ctx: SwarmContext) -> str:
+    async def _run_agent(
+        self,
+        agent_name: str,
+        instructions: str,
+        ctx: SwarmContext,
+        routing_policy: str = "AUTO",
+    ) -> str:
         """Invoke a dynamic specialist agent with its specific instructions + prior context."""
         from core.agent import process_message as _proc
 
@@ -230,7 +288,12 @@ class SwarmSupervisor:
 
         # Each sub-agent gets an isolated session ID to prevent context pollution
         agent_session = f"{ctx.session_id}:swarm:{agent_name.lower().replace('agent', '')}"
-        return await _proc(agent_session, full_prompt, platform=ctx.platform)
+        return await _proc(
+            agent_session,
+            full_prompt,
+            platform=ctx.platform,
+            routing_policy_override=routing_policy,
+        )
 
     async def _synthesize(self, ctx: SwarmContext) -> str:
         """Combine all agent outputs into one coherent final response."""

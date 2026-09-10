@@ -24,14 +24,15 @@ async def warm_up_router() -> None:
 
 
 async def process_message(
-    session_id:     str,
-    message:        str,
-    platform:       str         = "unknown",
-    force_provider: str | None  = None,
-    has_media:      bool        = False,
-    image_data:     bytes | None = None,
-    image_mime:     str          = "image/jpeg",
-    raw_message:    str | None  = None,
+    session_id:               str,
+    message:                  str,
+    platform:                 str         = "unknown",
+    force_provider:           str | None  = None,
+    has_media:                bool        = False,
+    image_data:               bytes | None = None,
+    image_mime:               str          = "image/jpeg",
+    raw_message:              str | None  = None,
+    routing_policy_override:  str | None  = None,
 ) -> str:
     """
     Process a user message using the best available AI provider.
@@ -56,6 +57,14 @@ async def process_message(
                      (Gemini, OpenAI) — they actually SEE the image.
     image_mime     : MIME type of the image (e.g. "image/png", "image/jpeg").
     raw_message    : The original unprocessed user prompt.
+    routing_policy_override : Temporarily override the global routing policy for
+                     this call only ("SPEED", "QUALITY", "AUTO", "ECO", "OFFLINE").
+                     Used by swarm sub-agents to select role-appropriate models
+                     (e.g. ResearchAgent → SPEED, QA Reviewer → QUALITY).
+                     NOTE: Not thread-safe across concurrent calls with different
+                     overrides; safe for our single-process async event loop.
+                     TODO: Replace with per-call policy kwarg in router.route()
+                     in a future refactor to eliminate the global-state mutation.
 
     Returns
     -------
@@ -125,15 +134,40 @@ async def process_message(
         except ValueError:
             log.warning("Unknown provider '%s', using auto-routing", force_provider)
 
-    response: AgentResponse = await router.route(
-        session_id=session_id,
-        message=message,
-        platform=platform,
-        force_provider=fp,
-        has_media=has_media,
-        image_data=image_data,
-        image_mime=image_mime,
+    # Temporarily override routing policy for this call if requested.
+    # This is safe for our single-process async event loop — no other
+    # coroutine can preempt us during the `await` block below.
+    # TODO: Replace with a per-call policy kwarg in router.route() in a
+    # future refactor to eliminate this global-state mutation entirely.
+    _override_active = (
+        routing_policy_override is not None
+        and routing_policy_override.upper() != settings.routing_policy
     )
+    if _override_active:
+        _old_policy = router._settings.routing_policy
+        router._settings.routing_policy = routing_policy_override.upper()
+        try:
+            response: AgentResponse = await router.route(
+                session_id=session_id,
+                message=message,
+                platform=platform,
+                force_provider=fp,
+                has_media=has_media,
+                image_data=image_data,
+                image_mime=image_mime,
+            )
+        finally:
+            router._settings.routing_policy = _old_policy
+    else:
+        response: AgentResponse = await router.route(
+            session_id=session_id,
+            message=message,
+            platform=platform,
+            force_provider=fp,
+            has_media=has_media,
+            image_data=image_data,
+            image_mime=image_mime,
+        )
 
     content = response.content
 
