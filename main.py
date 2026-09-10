@@ -159,6 +159,11 @@ def main() -> None:
         sys.exit(1)
     finally:
         try:
+            from tools.mcp_manager import shutdown_mcp
+            loop.run_until_complete(shutdown_mcp())
+        except Exception as e:
+            log.error("Error shutting down MCP: %s", e)
+        try:
             pending = asyncio.all_tasks(loop)
             if pending:
                 log.info("Cancelling %d remaining tasks...", len(pending))

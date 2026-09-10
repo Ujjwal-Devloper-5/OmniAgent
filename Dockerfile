@@ -86,8 +86,8 @@ RUN mkdir -p /app/data /app/logs && chown -R omniagent:omniagent /app
 
 USER omniagent
 
-# Health check: verify Python can import our main module
-HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import main" || exit 1
+# Health check — verifies admin API is responsive
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
 
 CMD ["uv", "run", "python", "main.py"]

@@ -8,9 +8,23 @@ import json
 import logging
 import os
 import sys
-from collections import deque
+import time
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
+
+_AUTH_FAILURES: dict[str, list[float]] = defaultdict(list)
+_AUTH_MAX_ATTEMPTS = 5
+_AUTH_WINDOW_SECONDS = 900  # 15 minutes
+
+def _is_auth_rate_limited(client_ip: str) -> bool:
+    now = time.monotonic()
+    window_start = now - _AUTH_WINDOW_SECONDS
+    _AUTH_FAILURES[client_ip] = [t for t in _AUTH_FAILURES[client_ip] if t > window_start]
+    return len(_AUTH_FAILURES[client_ip]) >= _AUTH_MAX_ATTEMPTS
+
+def _record_auth_failure(client_ip: str) -> None:
+    _AUTH_FAILURES[client_ip].append(time.monotonic())
 
 import uvicorn
 from fastapi import FastAPI, Depends, HTTPException, Request
@@ -80,9 +94,17 @@ from fastapi import Header
 import secrets
 
 async def verify_token(
+    request: Request,
     authorization: str | None = Header(default=None),
 ) -> None:
     """Verify admin API token using constant-time comparison to prevent timing attacks."""
+    client_ip = request.client.host if request.client else "0.0.0.0"
+    if _is_auth_rate_limited(client_ip):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed auth attempts. Locked out for {_AUTH_WINDOW_SECONDS // 60} minutes."
+        )
+
     if not settings.admin_api_secret:
         raise HTTPException(
             status_code=503,
@@ -92,12 +114,14 @@ async def verify_token(
     if authorization and authorization.startswith("Bearer "):
         token = authorization[7:].strip()
     if not token:
+        _record_auth_failure(client_ip)
         raise HTTPException(
             status_code=401,
             detail="Missing or invalid Authorization header. Use: Authorization: Bearer <token>"
         )
     # Constant-time comparison to prevent timing attacks
     if not secrets.compare_digest(token.encode(), settings.admin_api_secret.encode()):
+        _record_auth_failure(client_ip)
         raise HTTPException(status_code=401, detail="Invalid token")
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -279,6 +303,109 @@ async def get_config(_: None = Depends(verify_token)):
     }
     all_settings = settings.model_dump()
     return {k: v for k, v in all_settings.items() if k in SAFE_CONFIG_KEYS}
+
+class ConfigUpdateRequest(BaseModel):
+    """Schema for hot-reload config updates (non-sensitive fields only)."""
+    routing_policy: str | None = None
+    sandbox_ttl_seconds: int | None = None
+    sandbox_max_concurrent: int | None = None
+    rate_limit_rpm: int | None = None
+    rate_limit_tpd: int | None = None
+
+
+@app.post("/api/config/update")
+async def update_config(
+    req: ConfigUpdateRequest,
+    _: str = Depends(verify_token),
+) -> dict:
+    """Hot-reload config — update non-sensitive settings without restart."""
+    from config import settings
+    updated: dict = {}
+    errors: dict = {}
+
+    if req.routing_policy is not None:
+        valid = {"AUTO", "ECO", "SPEED", "QUALITY", "OFFLINE"}
+        if req.routing_policy.upper() not in valid:
+            errors["routing_policy"] = f"Must be one of: {sorted(valid)}"
+        else:
+            settings.routing_policy = req.routing_policy.upper()
+            try:
+                from core.model_router import get_router
+                get_router()._settings.routing_policy = settings.routing_policy
+            except Exception:
+                pass
+            updated["routing_policy"] = settings.routing_policy
+
+    if req.sandbox_ttl_seconds is not None:
+        if 60 <= req.sandbox_ttl_seconds <= 3600:
+            settings.sandbox_ttl_seconds = req.sandbox_ttl_seconds
+            updated["sandbox_ttl_seconds"] = req.sandbox_ttl_seconds
+        else:
+            errors["sandbox_ttl_seconds"] = "Must be 60–3600"
+
+    if req.sandbox_max_concurrent is not None:
+        if 1 <= req.sandbox_max_concurrent <= 50:
+            settings.sandbox_max_concurrent = req.sandbox_max_concurrent
+            updated["sandbox_max_concurrent"] = req.sandbox_max_concurrent
+        else:
+            errors["sandbox_max_concurrent"] = "Must be 1–50"
+
+    if req.rate_limit_rpm is not None:
+        if 1 <= req.rate_limit_rpm <= 1000:
+            settings.rate_limit_rpm = req.rate_limit_rpm
+            updated["rate_limit_rpm"] = req.rate_limit_rpm
+        else:
+            errors["rate_limit_rpm"] = "Must be 1–1000"
+
+    if req.rate_limit_tpd is not None:
+        if 1000 <= req.rate_limit_tpd <= 10_000_000:
+            settings.rate_limit_tpd = req.rate_limit_tpd
+            updated["rate_limit_tpd"] = req.rate_limit_tpd
+        else:
+            errors["rate_limit_tpd"] = "Must be 1000–10,000,000"
+
+    status = "partial" if (updated and errors) else ("ok" if updated else "no_change")
+    return {"status": status, "updated": updated, "errors": errors}
+
+@app.get("/api/mcp/status")
+async def get_mcp_status(_: str = Depends(verify_token)) -> dict:
+    """Per-server MCP health with circuit breaker state."""
+    try:
+        from tools.mcp_manager import get_mcp_manager
+        mgr = get_mcp_manager()
+        return {
+            "available": mgr.is_available(),
+            "servers": mgr.get_server_status(),
+            "total_tools": len(mgr.get_tools()),
+        }
+    except Exception as exc:
+        return {"available": False, "servers": {}, "error": str(exc)}
+
+@app.get("/api/models/status")
+async def get_model_status(_: str = Depends(verify_token)) -> dict:
+    """Live Pareto scores for all registry models."""
+    try:
+        from core.model_registry import get_registry
+        registry = get_registry()
+        ranked = registry.get_ranked_list()
+        return {
+            "total": len(ranked),
+            "models": [
+                {
+                    "id": m.id,
+                    "provider": m.provider.value if hasattr(m.provider, "value") else str(m.provider),
+                    "score": round(registry.compute_score(m), 3),
+                    "available": m.available,
+                    "failures": m.consecutive_failures,
+                    "intelligence": m.intelligence,
+                    "is_free": getattr(m, "is_free_tier", False),
+                    "tags": list(getattr(m, "tags", [])),
+                }
+                for m in ranked
+            ],
+        }
+    except Exception as exc:
+        return {"error": str(exc), "models": []}
 
 # Serve dashboard from / 
 from fastapi.responses import HTMLResponse

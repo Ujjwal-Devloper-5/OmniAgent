@@ -49,6 +49,7 @@ services:
     - 8181:8080
     volumes:
     - .:/app:ro
+    - ./mcp.json:/app/mcp.json:ro
     - omniagent_venv:/app/.venv
     - omniagent_data:/app/data
     - omniagent_logs:/app/logs
