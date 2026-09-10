@@ -147,6 +147,7 @@ class GeminiAgent(BaseAgent):
         max_retries: int,
         image_data: Optional[bytes] = None,
         image_mime: str = "image/jpeg",
+        preferred_model: str | None = None,
     ) -> AgentResponse:
         """
         Run multimodal Gemini using the native genai SDK.
@@ -234,6 +235,7 @@ class GeminiAgent(BaseAgent):
         needs_vision: bool = False,
         image_data: Optional[bytes] = None,
         image_mime: str = "image/jpeg",
+        preferred_model: str | None = None,
     ) -> AgentResponse:
         if not settings.gemini_api_key:
             return AgentResponse(

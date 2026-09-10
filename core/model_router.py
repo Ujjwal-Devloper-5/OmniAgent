@@ -723,6 +723,18 @@ class ModelRouter:
                 priority = [p for p in _reordered_providers]
         # AUTO: leave priority as-is (registry already scored optimally)
 
+        # Normalise priority to consistent (provider, model_id | None) 2-tuples.
+        # _select_best_model_for_task returns bare ModelProvider; forced-provider
+        # paths and policy-reorder paths return (provider, model_id) tuples.
+        # We unify here so the loop below always sees exactly 2-tuples.
+        _normalised: list[tuple[ModelProvider, str | None]] = []
+        for entry in priority:
+            if isinstance(entry, tuple):
+                _normalised.append((entry[0], entry[1] if len(entry) > 1 else None))
+            else:
+                _normalised.append((entry, None))
+        priority = _normalised
+
         first_choice = priority[0][0]
         last_error: Exception | None = None
 
@@ -809,7 +821,7 @@ class ModelRouter:
 
         raise RuntimeError(
             f"All providers failed. Last error: {last_error}\n"
-            f"Tried: {[p[0].value for p, _ in priority]}"
+            f"Tried: {[p.value if hasattr(p, 'value') else str(p) for p, _ in priority]}"
         )
 
     # ── Memory management ─────────────────────────────────────────────────────

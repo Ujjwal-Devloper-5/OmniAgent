@@ -103,6 +103,7 @@ class OpenRouterAgent(BaseAgent):
         needs_vision: bool = False,
         image_data: bytes | None = None,
         image_mime: str = "image/jpeg",
+        preferred_model: str | None = None,
     ) -> AgentResponse:
         if not settings.openrouter_api_key:
             return AgentResponse(
