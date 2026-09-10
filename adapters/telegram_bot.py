@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import platform
 import asyncio
+import aiofiles
 import re as _re
 from datetime import datetime, timezone
-from collections import deque
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction, ParseMode
@@ -50,8 +50,6 @@ _tg_app = None
 # ───────────────────────────────────────────────────────────────────────────────
 
 _TG_SPECIAL_CHARS = r"_*[]()~`>#+-=|{}.!"
-_CHAT_HISTORY: dict[int, deque] = {}
-_CONTEXT_MESSAGES = 20
 
 def escape_markdown(text: str) -> str:
     """
@@ -155,19 +153,6 @@ async def _send_long_message(
                 await update.message.reply_text(plain[:4000])
             except Exception:
                 pass
-
-
-def _update_chat_history(update: Update) -> None:
-    if not update.message or update.message.chat.type == 'private':
-        return
-    chat_id = update.message.chat_id
-    if chat_id not in _CHAT_HISTORY:
-        _CHAT_HISTORY[chat_id] = deque(maxlen=_CONTEXT_MESSAGES)
-    
-    user_name = update.message.from_user.first_name if update.message.from_user else "Unknown"
-    ts = update.message.date.strftime("%H:%M") if update.message.date else ""
-    text = update.message.text or update.message.caption or "[Media]"
-    _CHAT_HISTORY[chat_id].append(f"[{ts}] {user_name}: {text}")
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -276,8 +261,38 @@ async def _handle_ai_message(
     if not update.message:
         return
 
+    chat_type = update.message.chat.type  # 'private', 'group', 'supergroup', 'channel'
+    if chat_type in ("group", "supergroup"):
+        bot_username = context.bot.username
+        text_check = (update.message.text or update.message.caption or "")
+        
+        is_mention = bot_username and f"@{bot_username}" in text_check
+        is_reply_to_bot = (
+            update.message.reply_to_message is not None
+            and update.message.reply_to_message.from_user is not None
+            and update.message.reply_to_message.from_user.id == context.bot.id
+        )
+        
+        if not is_mention and not is_reply_to_bot:
+            return  # Silently ignore
+        
+        # Strip the bot mention from the message text before processing
+        if is_mention and bot_username:
+            text = text_check.replace(f"@{bot_username}", "").strip()
+
+    raw_message_text = text
+
+    # In groups: prefix message with user name for context
+    if chat_type in ("group", "supergroup"):
+        user_name = update.message.from_user.first_name or "User"
+        text = f"[{user_name}]: {text}"
+
     user_id = str(update.message.from_user.id) if update.message.from_user else "unknown"
-    session_id = f"telegram_{update.message.chat_id}"
+    
+    if chat_type == 'private':
+        session_id = f"telegram_dm_{user_id}"
+    else:
+        session_id = f"telegram_group_{update.message.chat_id}"
 
     # Rate limit check
     rate_limiter = get_rate_limiter()
@@ -285,12 +300,6 @@ async def _handle_ai_message(
     if not allowed:
         await update.message.reply_text(reason)
         return
-
-    # Maintain context for groups (Deque update only)
-    chat_type = update.message.chat.type
-    if chat_type != 'private':
-        history = _CHAT_HISTORY.get(update.message.chat_id, [])
-        # Note: We no longer inject _CHAT_HISTORY into the prompt. UnifiedMemory in agent.py handles it.
 
     # God mode and language injection
     lang_instruction = (
@@ -344,7 +353,7 @@ async def _handle_ai_message(
             has_media=has_media,
             image_data=image_data,
             image_mime=image_mime,
-            raw_message=text,
+            raw_message=raw_message_text,
         )
 
         # Record token usage
@@ -418,7 +427,6 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
         await update.message.reply_text("Usage: /ask <question>")
         return
-    _update_chat_history(update)
     question = " ".join(context.args)
     await _handle_ai_message(update, context, question)
 
@@ -427,14 +435,12 @@ async def cmd_translate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not context.args or len(context.args) < 2:
         await update.message.reply_text("Usage: /translate <lang> <text>")
         return
-    _update_chat_history(update)
     lang = context.args[0]
     text = " ".join(context.args[1:])
     await _handle_ai_message(update, context, f"Please translate the following text to {lang}:\n\n{text}")
 
 
 async def cmd_summarize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _update_chat_history(update)
     if update.message.chat.type == 'private':
         await _handle_ai_message(update, context, "Please summarize our recent conversation.")
     else:
@@ -442,7 +448,11 @@ async def cmd_summarize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    session_id = f"telegram_{update.message.chat_id}"
+    user_id = str(update.message.from_user.id) if update.message.from_user else "unknown"
+    if update.message.chat.type == 'private':
+        session_id = f"telegram_dm_{user_id}"
+    else:
+        session_id = f"telegram_group_{update.message.chat_id}"
     try:
         await clear_memory(session_id)
         await update.message.reply_text(
@@ -516,7 +526,10 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     provider = context.args[0].lower()
     query = " ".join(context.args[1:])
     user_id = str(update.message.from_user.id) if update.message.from_user else "unknown"
-    session_id = f"telegram_{update.message.chat_id}"
+    if update.message.chat.type == 'private':
+        session_id = f"telegram_dm_{user_id}"
+    else:
+        session_id = f"telegram_group_{update.message.chat_id}"
 
     rate_limiter = get_rate_limiter()
     allowed, reason = await rate_limiter.check_request(f"telegram_{user_id}")
@@ -550,7 +563,6 @@ async def handle_text_message(
     """Handle regular text messages."""
     if not update.message or not update.message.text:
         return
-    _update_chat_history(update)
     await _handle_ai_message(update, context, update.message.text)
 
 
@@ -575,7 +587,6 @@ async def handle_photo(
     """Handle photo messages — route to vision-capable model."""
     if not update.message:
         return
-    _update_chat_history(update)
     caption = update.message.caption or "Please describe or analyse this image in detail."
 
     image_data = None
@@ -606,7 +617,6 @@ async def handle_document(
     """Handle document messages — route to capable model."""
     if not update.message:
         return
-    _update_chat_history(update)
     doc = update.message.document
     caption = update.message.caption or ""
     file_info = f"'{doc.file_name}' (type: {doc.mime_type}, size: {doc.file_size} bytes)"
@@ -626,7 +636,6 @@ async def handle_voice(
     """Handle voice messages."""
     if not update.message:
         return
-    _update_chat_history(update)
     await _handle_ai_message(
         update,
         context,
@@ -641,7 +650,6 @@ async def handle_sticker(
     """Handle sticker messages."""
     if not update.message:
         return
-    _update_chat_history(update)
     sticker_emoji = update.message.sticker.emoji if update.message.sticker and update.message.sticker.emoji else ""
     await _handle_ai_message(
         update,
@@ -675,11 +683,12 @@ async def start_telegram() -> None:
 
     async def _telegram_file_upload(file_path: str, filename: str, chat_id: str, description: str = "") -> None:
         if _tg_app:
-            with open(file_path, 'rb') as f:
+            async with aiofiles.open(file_path, 'rb') as f:
+                data = await f.read()
                 from telegram import InputFile
                 await _tg_app.bot.send_document(
                     chat_id=int(chat_id),
-                    document=InputFile(f, filename=filename),
+                    document=InputFile(data, filename=filename),
                     caption=description[:1024] if description else None,
                 )
 

@@ -191,6 +191,69 @@ async def download_slack_image(file_obj: dict) -> tuple[bytes | None, str]:
         log.warning("Failed to download Slack file %s: %s", url, exc)
         return None, ""
 
+import time
+_USER_INFO_CACHE: dict[str, tuple[str, float]] = {}  # user_id -> (display_name, timestamp)
+_USER_INFO_TTL = 3600  # 1 hour
+
+async def _get_slack_user_name(client, user_id: str) -> str:
+    """Get Slack user display name with TTL caching to avoid API hammering."""
+    now = time.monotonic()
+    cached = _USER_INFO_CACHE.get(user_id)
+    if cached and (now - cached[1]) < _USER_INFO_TTL:
+        return cached[0]
+    
+    try:
+        info = await client.users_info(user=user_id)
+        name = (
+            info["user"].get("profile", {}).get("display_name")
+            or info["user"].get("real_name")
+            or user_id
+        )
+    except Exception:
+        name = user_id
+    
+    _USER_INFO_CACHE[user_id] = (name, now)
+    return name
+
+async def _slack_upload_file(
+    client,
+    channel_id: str,
+    thread_ts: str | None,
+    file_path: str,
+    filename: str,
+    title: str = "",
+) -> None:
+    """Upload a file to Slack using files.uploadV2 (the correct modern API)."""
+    import aiofiles
+    import os
+    
+    file_size = os.path.getsize(file_path)
+    if file_size == 0:
+        log.warning("Slack upload: file %s is empty, skipping", filename)
+        return
+    
+    async with aiofiles.open(file_path, "rb") as f:
+        content = await f.read()
+    
+    # Use the async client for non-blocking upload
+    upload_kwargs: dict = {
+        "channel_id": channel_id,
+        "content": content,
+        "filename": filename,
+        "title": title or filename,
+    }
+    if thread_ts:
+        upload_kwargs["thread_ts"] = thread_ts
+    
+    await client.files_upload_v2(**upload_kwargs)
+    log.info("Slack: uploaded file %s (%d bytes) to channel %s", filename, file_size, channel_id)
+
+def _make_slack_upload_callback(client, channel_id: str, thread_ts: str | None):
+    """Factory: creates a platform-specific upload callback for Slack."""
+    async def _upload_callback(file_path: str, filename: str) -> None:
+        await _slack_upload_file(client, channel_id, thread_ts, file_path, filename)
+    return _upload_callback
+
 async def make_ai_prompt_with_context(client, user_message: str, user_id: str) -> str:
     """Build prompt with language instruction and God Mode."""
     lang_instruction = (
@@ -199,23 +262,15 @@ async def make_ai_prompt_with_context(client, user_message: str, user_id: str) -
     )
 
     god_mode_instruction = ""
-    display_name = "Unknown"
     is_owner = False
     
+    display_name = await _get_slack_user_name(client, user_id)
     try:
-        user_info = await client.users_info(user=user_id)
-        if user_info.get("ok"):
-            user_data = user_info["user"]
-            profile = user_data.get("profile", {})
-            real_name = profile.get("real_name", "").lower()
-            dn = profile.get("display_name", "").lower()
-            display_name = profile.get("display_name") or real_name
-            
-            from core.user_brain import is_owner as _is_owner
-            if _is_owner(str(user_id), platform="slack"):
-                is_owner = True
+        from core.user_brain import is_owner as _is_owner
+        if _is_owner(str(user_id), platform="slack"):
+            is_owner = True
     except Exception as exc:
-        log.warning("Failed to fetch Slack user info: %s", exc)
+        log.warning("Failed to check Slack owner status: %s", exc)
 
     if is_owner:
         god_mode_instruction = (
@@ -282,6 +337,14 @@ async def _process_slack_message(body: dict, client, text: str, user_id: str, ch
                     break
 
     try:
+        from tools.upload_tool import set_upload_context, register_upload_callback
+        
+        set_upload_context(session_id)
+        register_upload_callback(
+            session_id,
+            _make_slack_upload_callback(client, channel, thread_ts),
+        )
+        
         enriched_content = await make_ai_prompt_with_context(client, text, user_id)
         
         response = await process_message(
@@ -367,7 +430,8 @@ async def cmd_ask(ack, body, say, client) -> None:
         if not text:
             await client.chat_postEphemeral(channel=channel, user=user_id, text="Please provide a question!")
             return
-        await _process_slack_message(body, client, text, user_id, channel, None)
+        session_id = f"slack_channel_{channel}"
+        await _process_slack_message(body, client, text, user_id, channel, None, session_id=session_id)
     except Exception as exc:
         log.error("Error in /ask command: %s", exc, exc_info=True)
 

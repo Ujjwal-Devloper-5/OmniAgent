@@ -351,12 +351,17 @@ class OmniAgentDiscord(commands.Bot):
         attachment_info: list[str] = []
         image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".svg"}
 
-        # Holds the raw bytes + MIME of the first successfully downloaded image,
-        # so vision-capable AI providers can perform real pixel-level analysis
-        # rather than only receiving a CDN URL (which many providers cannot fetch).
-        _downloaded_image_bytes: bytes | None = None
-        _downloaded_image_mime: str = "image/jpeg"
-        _image_downloaded = False  # download at most one image per message
+        _downloaded_image_bytes: bytes | list[bytes] | None = None
+        _downloaded_image_mime: str | list[str] = "image/jpeg"
+        
+        # Collect up to 4 image attachments
+        image_attachments = [
+            att for att in message.attachments
+            if att.content_type and att.content_type.startswith("image/")
+        ][:4]
+        
+        img_bytes_list = []
+        img_mime_list = []
 
         for att in message.attachments:
             has_media = True
@@ -366,13 +371,25 @@ class OmniAgentDiscord(commands.Bot):
             attachment_info.append(
                 f"[Attachment: {kind} '{att.filename}' ({size_kb}KB) — URL: {att.url}]"
             )
-            # Download the first image for real vision analysis
-            if kind == "image" and not _image_downloaded:
-                img_bytes, img_mime = await download_attachment_image(att)
-                if img_bytes:
-                    _downloaded_image_bytes = img_bytes
-                    _downloaded_image_mime = img_mime
-                    _image_downloaded = True
+
+        for att in image_attachments:
+            img_bytes, img_mime = await download_attachment_image(att)
+            if img_bytes:
+                if img_mime == "image/svg+xml":
+                    # SVG: read as text and append to message
+                    svg_text = img_bytes.decode("utf-8", errors="replace")
+                    content = f"{content}\n\n[SVG Content]:\n```xml\n{svg_text[:3000]}\n```"
+                else:
+                    img_bytes_list.append(img_bytes)
+                    img_mime_list.append(img_mime)
+
+        if img_bytes_list:
+            if len(img_bytes_list) == 1:
+                _downloaded_image_bytes = img_bytes_list[0]
+                _downloaded_image_mime = img_mime_list[0]
+            else:
+                _downloaded_image_bytes = img_bytes_list
+                _downloaded_image_mime = img_mime_list
 
 
         # Stickers also count as media

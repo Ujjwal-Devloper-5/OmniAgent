@@ -99,6 +99,15 @@ async def process_message(
     except Exception as e:
         log.warning("Failed to inject memory context: %s", e)
 
+    # Stage 2: LLM arbiter for borderline swarm decisions
+    if _decision.swarm_confidence == "LOW" and ":swarm:" not in session_id:
+        from core.task_classifier import should_use_swarm_async
+        _decision.use_swarm = await should_use_swarm_async(_original_message, _decision)
+        log.info(
+            "SwarmArbiter refined swarm decision: use_swarm=%s",
+            _decision.use_swarm,
+        )
+
     # ── Explicit Swarm Override (Phase 3) ────────────────────────────────────
     # NEVER trigger a swarm if we are already inside a sub-agent!
     if _decision.use_swarm and ":swarm:" not in session_id:

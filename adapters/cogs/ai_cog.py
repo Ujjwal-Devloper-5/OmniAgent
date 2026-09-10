@@ -20,6 +20,7 @@ class AICog(commands.Cog):
             content=question,
             user_id=str(interaction.user.id),
             interaction=interaction,
+            raw_user_message=question,
         )
 
     @app_commands.command(name="model", description="Force a specific AI provider")
@@ -40,6 +41,7 @@ class AICog(commands.Cog):
             user_id=str(interaction.user.id),
             interaction=interaction,
             force_provider=provider,
+            raw_user_message=question,
         )
 
     @app_commands.command(name="summarize", description="AI summarises recent channel messages")

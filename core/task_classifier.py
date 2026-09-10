@@ -68,6 +68,7 @@ class TaskDecision:
     capabilities_needed:   list[str]      # fed directly to model router
     confidence:            float          # 0.0–1.0
     rationale:             str            # logged for debugging
+    swarm_confidence:      str = "HIGH"  # "HIGH" or "LOW" (LOW = borderline, LLM arbiter needed)
 
     # Convenience
     @property
@@ -142,7 +143,7 @@ _ANALYSIS_SIGNALS = frozenset({
 })
 
 _DEPTH_SIGNALS = frozenset({
-    "comprehensive", "detailed", "in-depth", "thorough", "exhaustive",
+    "comprehensive", "detailed", "in-depth", "in depth", "thorough", "exhaustive",
     "complete", "full", "extensive", "deep dive", "deep research",
     "step by step", "in detail", "elaborate", "expand on",
     "everything about", "all aspects",
@@ -201,6 +202,187 @@ def _signal_score(text_lower: str, signal_set: frozenset) -> int:
             if signal in text_lower:
                 score += 1
     return score
+
+
+# ─── Swarm heuristic scoring constants ────────────────────────────────────────
+# Scores:
+#   >= SWARM_YES_THRESHOLD  → swarm (high confidence heuristic)
+#   <= SWARM_NO_THRESHOLD   → no swarm (high confidence heuristic)
+#   between               → borderline: send to LLM arbiter
+_SWARM_YES_THRESHOLD = 3   # strong multi-signal match → swarm
+_SWARM_NO_THRESHOLD  = 0   # no signals → no swarm
+
+# These task types NEVER benefit from swarm — hard exclusions
+_SWARM_EXCLUDED_TYPES = frozenset({TaskType.QUICK, TaskType.VISION})
+
+# These task types CAN use swarm but only when complexity is HIGH
+_SWARM_CONDITIONAL_TYPES = frozenset({
+    TaskType.RESEARCH, TaskType.ANALYSIS, TaskType.CREATIVE, TaskType.GENERAL
+})
+
+
+def _heuristic_swarm_score(
+    text_lower: str,
+    task_type: TaskType,
+    complexity: ComplexityLevel,
+    requires_file_output: bool,
+    words: int,
+) -> int:
+    """
+    Compute a swarm-worthiness score based purely on heuristics.
+    
+    Returns an integer score:
+      >= 3: definitely use swarm
+      <= 0: definitely no swarm
+      1-2:  borderline — send to LLM arbiter
+    """
+    # Hard NO: task types that never benefit from swarm
+    if task_type in _SWARM_EXCLUDED_TYPES:
+        return -10  # Force no-swarm
+    
+    # Coding and math tasks only need swarm for truly massive projects
+    if task_type in (TaskType.CODING, TaskType.MATH):
+        # Only if: explicitly multi-step AND very long AND has file output
+        if requires_file_output and words > 50 and complexity == ComplexityLevel.HIGH:
+            return 2  # borderline — let LLM decide
+        return -5  # Normally no swarm for coding/math
+
+    score = 0
+
+    # +2: Deep research explicitly requested (strongest signal)
+    depth_score = _signal_score(text_lower, _DEPTH_SIGNALS)
+    research_score = _signal_score(text_lower, _RESEARCH_SIGNALS)
+    if depth_score >= 1 and research_score >= 1:
+        score += 2
+
+    # +1: High complexity task type
+    if complexity == ComplexityLevel.HIGH:
+        score += 1
+
+    # +1: Multi-step signals (but require at least 3 to count)
+    if _signal_score(text_lower, _MULTISTEP_SIGNALS) >= 3:
+        score += 1
+
+    # +1: Research + analysis combo (cross-domain synthesis)
+    analysis_score = _signal_score(text_lower, _ANALYSIS_SIGNALS)
+    if research_score >= 1 and analysis_score >= 1:
+        score += 1
+
+    # +1: Long message (>80 words) requesting a research/analysis task
+    if words > 80 and task_type in _SWARM_CONDITIONAL_TYPES:
+        score += 1
+
+    # +2: File output with research/analysis/creative (user expects deliverable)
+    # But NOT for simple creative requests — require complexity >= MEDIUM
+    if requires_file_output and complexity != ComplexityLevel.LOW:
+        if task_type in (TaskType.RESEARCH, TaskType.ANALYSIS):
+            score += 2
+        elif task_type == TaskType.CREATIVE and words > 30:
+            score += 1
+
+    # -2: Urgency signals (user wants it fast → no swarm)
+    if _signal_score(text_lower, _URGENCY_SIGNALS) >= 1:
+        score -= 2
+
+    # -1: Low complexity → no swarm
+    if complexity == ComplexityLevel.LOW:
+        score -= 1
+
+    return score
+
+
+# ─── LLM Swarm Arbiter ─────────────────────────────────────────────────────────
+# Cache: identical prompts return cached decision (in-memory, session-agnostic)
+import functools
+
+_ARBITER_CACHE: dict[str, bool] = {}
+_ARBITER_CACHE_MAX = 500  # LRU eviction when limit hit
+
+_ARBITER_SYSTEM_PROMPT = """You are a routing classifier for an AI orchestration system.
+Your job: decide if a user request genuinely requires multiple specialized AI agents 
+working sequentially (a "swarm"), or if a single AI agent can handle it directly.
+
+A swarm IS warranted when the task:
+- Requires gathering information from multiple sources AND synthesizing it
+- Has 3+ distinct phases (research, analysis, writing, QA)
+- Will produce a substantial structured deliverable (report, guide, analysis paper)
+- Needs domain expertise from multiple fields
+
+A swarm is NOT warranted when:
+- A single agent can answer directly from knowledge
+- It's a creative writing request (poem, story, script)
+- It's a coding task (one agent is best)
+- It's a math problem
+- The answer can be given in a few paragraphs
+- The user just wants a quick explanation
+
+Respond with EXACTLY one word: YES or NO. Nothing else."""
+
+
+async def _llm_swarm_arbiter(message: str, timeout_s: float = 3.0) -> bool | None:
+    """
+    Ask a fast LLM to decide if this task warrants a swarm.
+    
+    Uses SPEED routing policy → Groq llama-3.3-70b (~200ms TTFT).
+    Returns True (use swarm), False (no swarm), or None (timeout/error → fallback to heuristic).
+    Caches results to avoid repeated LLM calls for similar prompts.
+    """
+    # Normalize for cache key (first 200 chars, lowercased)
+    cache_key = message.strip().lower()[:200]
+    if cache_key in _ARBITER_CACHE:
+        log.debug("SwarmArbiter: cache hit for prompt")
+        return _ARBITER_CACHE[cache_key]
+
+    try:
+        # Import here to avoid circular imports at module load time
+        from core.model_router import get_router
+        from core.agents.base import ModelProvider
+        
+        router = get_router()
+        
+        # Only call if router is ready (boot probe done)
+        if not router._boot_probe_done:
+            return None
+        
+        # Use SPEED policy: Groq LPU for fastest response
+        # We temporarily ask the router with a minimal prompt
+        arbiter_prompt = (
+            f"{_ARBITER_SYSTEM_PROMPT}\\n\\nUser request: {message[:500]}"
+        )
+        
+        import asyncio as _asyncio
+        old_policy = router._settings.routing_policy
+        router._settings.routing_policy = "SPEED"
+        try:
+            response = await _asyncio.wait_for(
+                router.route(
+                    session_id="__swarm_arbiter__",
+                    message=arbiter_prompt,
+                    platform="internal",
+                ),
+                timeout=timeout_s,
+            )
+        finally:
+            router._settings.routing_policy = old_policy
+        
+        answer = response.content.strip().upper().split()[0] if response.content.strip() else ""
+        decision = answer == "YES"
+        
+        log.info(
+            "SwarmArbiter: LLM decided '%s' → swarm=%s",
+            answer, decision,
+        )
+        
+        # Cache result (LRU: evict oldest when full)
+        if len(_ARBITER_CACHE) >= _ARBITER_CACHE_MAX:
+            oldest_key = next(iter(_ARBITER_CACHE))
+            del _ARBITER_CACHE[oldest_key]
+        _ARBITER_CACHE[cache_key] = decision
+        return decision
+
+    except Exception as exc:
+        log.warning("SwarmArbiter: LLM call failed (%s) — falling back to heuristic", exc)
+        return None
 
 
 def classify(message: str, has_media: bool = False, platform: str = "") -> TaskDecision:
@@ -279,33 +461,27 @@ def classify(message: str, has_media: bool = False, platform: str = "") -> TaskD
     if requires_file_output and model_tier == ModelTier.FAST:
         model_tier = ModelTier.BALANCED
 
-    # ─── Swarm Decision ────────────────────────────────────────────────────
-    # Swarm is warranted when task is genuinely multi-step AND complex
-    depth_score = _signal_score(text_lower, _DEPTH_SIGNALS)
-    research_score = _signal_score(text_lower, _RESEARCH_SIGNALS)
-    multistep_score = _signal_score(text_lower, _MULTISTEP_SIGNALS)
-    analysis_score = _signal_score(text_lower, _ANALYSIS_SIGNALS)
-
-    use_swarm = (
-        # High-complexity research/analysis tasks
-        (complexity == ComplexityLevel.HIGH and task_type in (TaskType.RESEARCH, TaskType.ANALYSIS))
-        # Deep research explicitly requested
-        or (depth_score >= 1 and research_score >= 1)
-        # File output with research or analysis
-        or (requires_file_output and task_type in (TaskType.RESEARCH, TaskType.ANALYSIS, TaskType.CREATIVE) and complexity != ComplexityLevel.LOW)
-        # Explicitly multi-step + complex
-        or (multistep_score >= 3 and complexity == ComplexityLevel.HIGH)
-        # Research + analysis combo (e.g. "research X and compare with Y")
-        or (research_score >= 1 and analysis_score >= 1 and complexity != ComplexityLevel.LOW)
+    # ─── Swarm Decision — Stage 1: Heuristic ──────────────────────────────────
+    heuristic_score = _heuristic_swarm_score(
+        text_lower, task_type, complexity, requires_file_output, words
     )
 
-    # Never swarm for quick/simple/code/math — they don't benefit from it
-    if task_type in (TaskType.QUICK, TaskType.CODING, TaskType.MATH, TaskType.VISION):
-        use_swarm = False
-        
-    # EXPLICIT OVERRIDE: Always swarm if the user asks for a file (PDFs/scripts) or explicitly requests swarm
-    if "swarm" in text_lower or "multi-agent" in text_lower or requires_file_output:
+    if heuristic_score >= _SWARM_YES_THRESHOLD:
         use_swarm = True
+        swarm_confidence = "HIGH"
+    elif heuristic_score <= _SWARM_NO_THRESHOLD:
+        use_swarm = False
+        swarm_confidence = "HIGH"
+    else:
+        # Borderline (score 1-2): default to heuristic guess,
+        # Stage 2 LLM arbiter will refine this asynchronously
+        use_swarm = heuristic_score >= 2  # Conservative: only swarm if score == 2
+        swarm_confidence = "LOW"  # Signals async arbiter should be used
+
+    # Explicit user overrides — always respected
+    if "swarm" in text_lower or "multi-agent" in text_lower:
+        use_swarm = True
+        swarm_confidence = "HIGH"
 
     # ─── Confidence ────────────────────────────────────────────────────────
     # Higher confidence when multiple strong signals align
@@ -338,4 +514,32 @@ def classify(message: str, has_media: bool = False, platform: str = "") -> TaskD
         capabilities_needed=capabilities,
         confidence=confidence,
         rationale=rationale,
+        swarm_confidence=swarm_confidence,
     )
+
+
+async def should_use_swarm_async(message: str, decision: "TaskDecision") -> bool:
+    """
+    Two-stage swarm gate — Stage 2: LLM arbiter for borderline cases.
+    
+    Call this AFTER classify() when decision.swarm_confidence == 'LOW'.
+    Returns the final swarm decision.
+    
+    If the LLM arbiter times out or errors, falls back to the heuristic decision.
+    """
+    if decision.swarm_confidence == "HIGH":
+        # Heuristic was confident — no LLM call needed
+        return decision.use_swarm
+    
+    # Borderline: invoke LLM arbiter
+    log.info(
+        "SwarmArbiter: borderline case (heuristic score low-confidence) — invoking LLM arbiter"
+    )
+    llm_decision = await _llm_swarm_arbiter(message)
+    
+    if llm_decision is None:
+        # Arbiter failed/timed out — trust heuristic
+        log.warning("SwarmArbiter: fallback to heuristic decision=%s", decision.use_swarm)
+        return decision.use_swarm
+    
+    return llm_decision
