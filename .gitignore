@@ -37,3 +37,7 @@ Thumbs.db
 
 # Docker
 .docker/
+
+# Multi-Agent Swarm Files
+.agents/
+ORIGINAL_REQUEST.md
