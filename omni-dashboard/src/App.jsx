@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Cpu } from 'lucide-react';
@@ -106,15 +106,25 @@ function DashboardLayout({ children }) {
 
 export default function App() {
   const [authed, setAuthed] = useState(!!getToken());
-  
-  if (!authed) return <LoginScreen onLogin={() => setAuthed(true)} />;
-  
+
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      setAuthed(false);
+    };
+    window.addEventListener('auth:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <BrowserRouter>
-          <DashboardLayout />
-        </BrowserRouter>
+        {!authed ? (
+          <LoginScreen onLogin={() => setAuthed(true)} />
+        ) : (
+          <BrowserRouter>
+            <DashboardLayout />
+          </BrowserRouter>
+        )}
       </ToastProvider>
     </QueryClientProvider>
   );

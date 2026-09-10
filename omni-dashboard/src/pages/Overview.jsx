@@ -4,6 +4,7 @@ import { Users, Cpu, CheckCircle, MessageSquare } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import ProviderDot from '../components/ProviderDot';
 import Badge from '../components/Badge';
+import McpStatusCard from '../components/McpStatusCard';
 import { api } from '../lib/api';
 
 export default function Overview() {
@@ -16,8 +17,9 @@ export default function Overview() {
   
   let healthyProviders = 0;
   let providers = [];
-  if (statusData?.providers) {
-    providers = Object.entries(statusData.providers).map(([name, p]) => ({name, ...p}));
+  const rawProviders = statusData?.providers || statusData?.router_health;
+  if (rawProviders) {
+    providers = Object.entries(rawProviders).map(([name, p]) => ({name, ...p}));
     healthyProviders = providers.filter(p => p.configured && p.healthy).length;
   }
   
@@ -110,6 +112,10 @@ export default function Overview() {
             )}
           </div>
         </div>
+      </div>
+
+      <div>
+        <McpStatusCard />
       </div>
     </div>
   );
