@@ -131,10 +131,59 @@ async def _sweep_sandbox_volumes() -> None:
         log.error("Janitor: Sandbox sweep failed: %s", e)
 
 
+async def _sweep_s3_storage() -> None:
+    """
+    Purge expired objects in S3/MinIO storage older than retention_reports_days.
+    Sweeps reports/, artifacts/, drafts/, and uploads/ prefixes.
+    """
+    try:
+        from core.storage import get_storage
+        storage = get_storage()
+        if not storage:
+            log.debug("Janitor: S3 storage backend not initialized; skipping S3 sweep")
+            return
+
+        retention_days = settings.retention_reports_days
+        log.info("Janitor: Initiating S3 storage sweep | retention_days=%d", retention_days)
+
+        total_purged = 0
+        prefixes = ["reports/", "artifacts/", "drafts/", "uploads/"]
+
+        for prefix in prefixes:
+            try:
+                purged = await storage.cleanup_old_files(prefix=prefix, days=retention_days)
+                total_purged += purged
+                if purged > 0:
+                    log.info("Janitor: Purged %d expired S3 objects | prefix=%s", purged, prefix)
+            except Exception as p_err:
+                log.warning("Janitor: Failed sweeping prefix '%s': %s", prefix, p_err)
+
+        if total_purged > 0:
+            log.info("Janitor: S3 storage sweep completed | total_purged=%d", total_purged)
+        else:
+            log.debug("Janitor: S3 storage sweep completed | no expired objects found")
+
+    except Exception as exc:
+        log.warning("Janitor: S3 storage sweep encountered an error (will retry next cycle): %s", exc)
+
+
 async def _sweep_all() -> None:
+    """Execute all automated sweeps with complete fault isolation."""
     log.info("Janitor: Beginning scheduled multi-tenant sweep...")
-    await _sweep_reports()
-    await _sweep_sandbox_volumes()
+    try:
+        await _sweep_reports()
+    except Exception as e:
+        log.error("Janitor: Report sweep failed: %s", e)
+
+    try:
+        await _sweep_s3_storage()
+    except Exception as e:
+        log.error("Janitor: S3 sweep failed: %s", e)
+
+    try:
+        await _sweep_sandbox_volumes()
+    except Exception as e:
+        log.error("Janitor: Sandbox volume sweep failed: %s", e)
 
 async def run_janitor_loop() -> None:
     """Background daemon loop that runs every 24 hours."""

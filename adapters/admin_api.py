@@ -7,8 +7,10 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
+import urllib.parse
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,10 @@ def _record_auth_failure(client_ip: str) -> None:
     _AUTH_FAILURES[client_ip].append(time.monotonic())
 
 import uvicorn
+import uuid
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+from starlette.routing import Match
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -35,7 +41,22 @@ from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
 
 from config import settings
-from core.logger import get_logger
+from core.logger import (
+    get_logger,
+    get_correlation_id,
+    set_correlation_id,
+    reset_correlation_id,
+    correlation_id_var,
+    JSONFormatter,
+)
+from core.metrics import (
+    CONTENT_TYPE_LATEST,
+    generate_latest,
+    record_request_duration,
+    record_error,
+    inc_active_requests,
+    dec_active_requests,
+)
 from core.model_registry import get_registry, _REGISTRY_PATH
 from core.memory import get_memory
 from core.user_settings import get_user_settings
@@ -52,8 +73,7 @@ class AdminLogHandler(logging.Handler):
     """Appends log lines to _log_buffer and broadcasts to SSE queues."""
     def __init__(self) -> None:
         super().__init__()
-        # Format similar to console
-        self.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        self.setFormatter(JSONFormatter())
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -75,6 +95,364 @@ class AdminLogHandler(logging.Handler):
 
 # ── FastAPI App ───────────────────────────────────────────────────────────────
 
+# ── Middlewares ───────────────────────────────────────────────────────────────
+
+
+_CORRELATION_ID_REGEX = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+_PARAM_DELIMITER_REGEX = re.compile(r"[^a-zA-Z0-9]+")
+
+_SAFE_PARAM_NAMES = frozenset({
+    # Common operational & pagination
+    "page",
+    "limit",
+    "offset",
+    "count",
+    "cursor",
+    # Safe keys & indexes
+    "sort_key",
+    "sort-key",
+    "sortkey",
+    "primary_key",
+    "primary-key",
+    "primarykey",
+    "foreign_key",
+    "foreign-key",
+    "foreignkey",
+    "cache_key",
+    "cache-key",
+    "cachekey",
+    "partition_key",
+    "partition-key",
+    "partitionkey",
+    "routing_key",
+    "routing-key",
+    "routingkey",
+    "id_key",
+    "id-key",
+    "idkey",
+    "search_key",
+    "search-key",
+    "searchkey",
+    "group_key",
+    "group-key",
+    "groupkey",
+    "sharding_key",
+    "sharding-key",
+    "shardingkey",
+    "query_key",
+    "query-key",
+    "querykey",
+    "filter_key",
+    "filter-key",
+    "filterkey",
+    "item_key",
+    "item-key",
+    "itemkey",
+    "translation_key",
+    "translation-key",
+    "public_key",
+    "public-key",
+    "publickey",
+    # Token metrics & limits
+    "max_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "token_count",
+    # Lexical non-sensitive words
+    "author",
+    "author_id",
+    "monkey",
+    "turkey",
+    "keyboard",
+    "secretary",
+})
+
+_SAFE_KEY_PREFIXES = frozenset({
+    "sort",
+    "primary",
+    "foreign",
+    "cache",
+    "partition",
+    "routing",
+    "id",
+    "search",
+    "group",
+    "sharding",
+    "query",
+    "filter",
+    "item",
+    "translation",
+    "public",
+    "max",
+})
+
+_SAFE_PREFIXES = ("sort_", "primary_", "cache_", "max_")
+
+_SENSITIVE_PARAM_NAMES = frozenset({
+    # Core secret keywords
+    "password",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "auth",
+    "authorization",
+    "signature",
+    "sig",
+    "passwd",
+    "pwd",
+    "passcode",
+    "passphrase",
+    "credential",
+    "credentials",
+    "bearer",
+    "key",
+    # Specific compound credentials
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "client_secret",
+    "private_key",
+    "secret_key",
+    "access_key",
+    "auth_key",
+    "cert",
+    "certificate",
+    "privatekey",
+    "secretkey",
+    "accesskey",
+    "authkey",
+})
+
+_SUBSTRING_SENSITIVE_KEYWORDS = (
+    "password",
+    "passwd",
+    "passcode",
+    "secret",
+    "token",
+    "apikey",
+    "bearer",
+)
+
+_SAFE_SUBSTRINGS_FOR_MASKING = (
+    "max_tokens",
+    "total_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "token_count",
+    "secretary",
+    "sort_key",
+    "sort-key",
+    "sortkey",
+    "primary_key",
+    "cache_key",
+    "foreign_key",
+    "routing_key",
+    "partition_key",
+    "public_key",
+    "keyboard",
+    "monkey",
+    "turkey",
+    "author_id",
+    "author",
+)
+
+
+def _is_sensitive_param_name(key: str) -> bool:
+    """Check if query parameter key indicates sensitive credential data."""
+    if not key:
+        return False
+    k = key.lower().strip()
+
+    # 1. Fast-path: check explicit safe operational whitelist
+    if k in _SAFE_PARAM_NAMES:
+        return False
+
+    # 2. Safe prefix check (sort_, primary_, cache_, max_)
+    if k.startswith(_SAFE_PREFIXES):
+        return False
+
+    # 3. Exact match against sensitive keywords
+    if k in _SENSITIVE_PARAM_NAMES:
+        return True
+
+    # 4. Pre-split camelCase / PascalCase transitions
+    # e.g. authKey -> auth Key, sortKey -> sort Key, getHTTPResponse -> get HTTP Response
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", key)
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", s)
+
+    # 5. Universal non-alphanumeric delimiter splitting
+    tokens = [p for p in _PARAM_DELIMITER_REGEX.split(s.lower()) if p]
+
+    # 6. Check token set against _SENSITIVE_PARAM_NAMES with safe prefix context for "key"
+    for i, t in enumerate(tokens):
+        if t in _SENSITIVE_PARAM_NAMES:
+            # Special protection for "key": ignore if preceded by safe operational prefix (e.g. sort_key, primary_key)
+            if t == "key" and i > 0 and tokens[i - 1] in _SAFE_KEY_PREFIXES:
+                continue
+            return True
+
+    # 7. Substring fallback for compound words without delimiter (e.g. secret, password, token, apikey, bearer)
+    # Mask known safe operational substrings first to avoid false positives (e.g. max_tokens containing "token")
+    k_sub = k
+    for safe in _SAFE_SUBSTRINGS_FOR_MASKING:
+        k_sub = k_sub.replace(safe, "")
+
+    for strong in _SUBSTRING_SENSITIVE_KEYWORDS:
+        if strong in k_sub:
+            return True
+
+    return False
+
+
+def _sanitize_query_params(query_params: Any) -> str:
+    """Sanitize query parameters by redacting sensitive values."""
+    if not query_params:
+        return ""
+    try:
+        items = query_params.multi_items() if hasattr(query_params, "multi_items") else query_params.items()
+        sanitized = [
+            (k, "[REDACTED]" if _is_sensitive_param_name(k) else v)
+            for k, v in items
+        ]
+        return urllib.parse.urlencode(sanitized, safe="[]:/")
+    except Exception:
+        return "[UNPARSEABLE_QUERY_PARAMS]"
+
+
+def _validate_or_generate_correlation_id(raw_cid: str | None) -> str:
+    """
+    Validate incoming correlation ID against safe regex ^[a-zA-Z0-9_-]{1,64}$.
+    If missing, empty, or failing regex validation, generates a new UUID4 string.
+    """
+    if raw_cid:
+        stripped = raw_cid.strip()
+        if _CORRELATION_ID_REGEX.match(stripped):
+            return stripped
+    return str(uuid.uuid4())
+
+
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    """
+    ASGI middleware for correlation ID extraction, generation, and propagation.
+    - Extracts 'X-Correlation-ID' (or fallback 'X-Request-ID') from request headers.
+    - If missing or empty, generates a new UUID4 string.
+    - Binds ID to contextvars (correlation_id_var) and request.state.correlation_id.
+    - Sets 'X-Correlation-ID' header on outgoing response.
+    - Logs start, completion, or error with execution timing.
+    - Restores contextvar in finally block.
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        raw_cid = request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID")
+        correlation_id = _validate_or_generate_correlation_id(raw_cid)
+
+        token = set_correlation_id(correlation_id)
+        try:
+            request.state.correlation_id = correlation_id
+            client_ip = request.client.host if request.client else "unknown"
+            start_time = time.perf_counter()
+
+            log.info(
+                "HTTP request started: %s %s",
+                request.method,
+                request.url.path,
+                extra={
+                    "http_method": request.method,
+                    "http_path": request.url.path,
+                    "client_ip": client_ip,
+                    "query_params": _sanitize_query_params(request.query_params),
+                    "correlation_id": correlation_id,
+                },
+            )
+
+            response = await call_next(request)
+            duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            response.headers["X-Correlation-ID"] = correlation_id
+
+            log.info(
+                "HTTP request finished: %s %s status=%d duration=%.2fms",
+                request.method,
+                request.url.path,
+                response.status_code,
+                duration_ms,
+                extra={
+                    "http_method": request.method,
+                    "http_path": request.url.path,
+                    "status_code": response.status_code,
+                    "duration_ms": duration_ms,
+                    "correlation_id": correlation_id,
+                },
+            )
+            return response
+        except Exception as exc:
+            duration_ms = round((time.perf_counter() - start_time) * 1000, 2) if "start_time" in locals() else 0.0
+            log.error(
+                "HTTP request error: %s %s error=%s duration=%.2fms",
+                request.method,
+                request.url.path,
+                str(exc),
+                duration_ms,
+                exc_info=True,
+                extra={
+                    "http_method": request.method,
+                    "http_path": request.url.path,
+                    "duration_ms": duration_ms,
+                    "correlation_id": correlation_id,
+                },
+            )
+            raise
+        finally:
+            reset_correlation_id(token)
+
+
+class PrometheusMetricsMiddleware(BaseHTTPMiddleware):
+    """ASGI middleware measuring request duration, active requests, and HTTP errors."""
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        inc_active_requests()
+        start_time = time.perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        except Exception as exc:
+            record_error(error_type=exc.__class__.__name__, component="http_server")
+            raise
+        finally:
+            duration = time.perf_counter() - start_time
+            endpoint = self._resolve_endpoint_path(request)
+            record_request_duration(
+                method=request.method,
+                endpoint=endpoint,
+                status_code=status_code,
+                duration_seconds=duration,
+            )
+            dec_active_requests()
+
+    def _resolve_endpoint_path(self, request: Request) -> str:
+        """Resolve route template to prevent high cardinality label explosion."""
+        route = request.scope.get("route")
+        if route and hasattr(route, "path"):
+            return route.path
+
+        app = request.app
+        for r in getattr(app, "routes", []):
+            match, _ = r.matches(request.scope)
+            if match == Match.FULL:
+                return getattr(r, "path", request.url.path)
+
+        path = request.url.path
+        if path in {"/metrics", "/health", "/api/health", "/"}:
+            return path
+        return "/unmatched"
+
+
+# ── FastAPI App ───────────────────────────────────────────────────────────────
+
 app = FastAPI(title="OmniAgent Admin API")
 
 app.add_middleware(
@@ -87,8 +465,18 @@ app.add_middleware(
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "X-Correlation-ID",
+        "X-Request-ID",
+    ],
+    expose_headers=["X-Correlation-ID", "X-Request-ID"],
 )
+
+app.add_middleware(PrometheusMetricsMiddleware)
+app.add_middleware(CorrelationIdMiddleware)
 
 from fastapi import Header
 import secrets
@@ -124,11 +512,25 @@ async def verify_token(
         _record_auth_failure(client_ip)
         raise HTTPException(status_code=401, detail="Invalid token")
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+# ── Observability & Health Endpoints ──────────────────────────────────────────
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint() -> Response:
+    """Expose Prometheus plain-text metrics (unauthenticated for scraper)."""
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
+
+@app.get("/health", tags=["Observability"])
+async def root_health_check() -> dict:
+    """Root health check alias for Docker HEALTHCHECK and load balancers."""
+    return {"status": "ok", "version": "2.0.0"}
 
 @app.get("/api/health")
 async def health_check() -> dict:
-    return {"status": "ok"}
+    """API health check."""
+    return {"status": "ok", "version": "2.0.0"}
 
 @app.get("/api/status", dependencies=[Depends(verify_token)])
 async def get_status() -> dict:

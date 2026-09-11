@@ -35,11 +35,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import mimetypes
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -80,52 +83,112 @@ def get_upload_context() -> Optional[UploadContext]:
     return _upload_ctx.get()
 
 
-def _reports_dir() -> Path:
+def _get_target_prefix() -> str:
+    """Derive clean tenant/platform prefix for object keys and report paths."""
     ctx = get_upload_context()
     if ctx and ctx.platform and ctx.target_id:
-        d = Path(f"/app/data/reports/{ctx.platform}_{ctx.target_id}")
-    else:
-        d = Path("/app/data/reports/global")
+        safe_platform = re.sub(r"[^\w\-]", "_", str(ctx.platform))
+        safe_target = re.sub(r"[^\w\-]", "_", str(ctx.target_id))
+        return f"{safe_platform}_{safe_target}"
+    return "global"
+
+
+def _reports_dir() -> Path:
+    target = _get_target_prefix()
+    d = Path(f"/app/data/reports/{target}")
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 async def _deliver_file(file_path: str, filename: str, description: str = "") -> str:
     """
-    Core delivery: try platform upload, fall back to saving in /app/data/reports/.
-    Returns a user-facing status string.
+    Core delivery router:
+    1. Swarm drafts: upload to S3 (or save locally) and return [INTERNAL_DRAFT_READY: ...]
+    2. Try direct chat platform upload (if callback registered and within platform limits)
+    3. Upload to S3StorageBackend and return 24h pre-signed download URL
+    4. Fallback: save to /app/data/reports/ if S3 is unavailable or fails
     """
     ctx = get_upload_context()
+    safe_filename = Path(filename).name
+    size_bytes = os.path.getsize(file_path)
+    size_kb = size_bytes / 1024
+    target = _get_target_prefix()
 
-    # DRAFT SUPPRESSION: If the swarm is running a QA loop, do NOT upload intermediate drafts to the user.
+    # 1. DRAFT SUPPRESSION (Swarm intermediate files)
     if ctx and ctx.is_internal_swarm:
-        reports = _reports_dir()
-        final_path = reports / filename
-        shutil.copy2(file_path, str(final_path))
-        log.info("File generated internally (upload suppressed) | filename=%s", filename)
-        return f"[INTERNAL_DRAFT_READY: {final_path}]"
-
-    size_kb = os.path.getsize(file_path) / 1024
-
-    if ctx and ctx.platform and ctx.target_id and ctx.platform in _upload_callbacks:
+        s3_uri = None
         try:
-            cb = _upload_callbacks[ctx.platform]
-            if asyncio.iscoroutinefunction(cb):
-                await cb(file_path, filename, ctx.target_id, description)
-            else:
-                await asyncio.get_event_loop().run_in_executor(None, cb, file_path, filename, ctx.target_id, description)
-            log.info("File delivered | platform=%s | filename=%s | size=%.1fKB", ctx.platform, filename, size_kb)
-            return f"✅ **{filename}** ({size_kb:.1f} KB) delivered to {ctx.platform}!"
+            from core.storage import get_storage
+            storage = get_storage()
+            if storage:
+                draft_key = f"drafts/{target}/{int(time.time())}_{safe_filename}"
+                s3_uri = await storage.upload_file(file_path, draft_key)
         except Exception as exc:
-            log.warning("Platform upload failed, saving locally: %s", exc)
+            log.warning("Swarm draft S3 upload failed (%s); retaining local copy", exc)
 
-    # Fallback: save to /app/data/reports/
-    dest = _reports_dir() / filename
+        reports = _reports_dir()
+        final_path = reports / safe_filename
+        shutil.copy2(file_path, str(final_path))
+        log.info("File generated internally (upload suppressed) | filename=%s", safe_filename)
+        ref = s3_uri or str(final_path)
+        return f"[INTERNAL_DRAFT_READY: {ref}]"
+
+    # 2. Direct platform upload if callback registered
+    if ctx and ctx.platform and ctx.target_id and ctx.platform in _upload_callbacks:
+        platform_limit = 25 * 1024 * 1024 if ctx.platform == "discord" else 50 * 1024 * 1024
+        if size_bytes <= platform_limit:
+            try:
+                cb = _upload_callbacks[ctx.platform]
+                if asyncio.iscoroutinefunction(cb):
+                    await cb(file_path, safe_filename, ctx.target_id, description)
+                else:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, cb, file_path, safe_filename, ctx.target_id, description
+                    )
+                log.info("File delivered | platform=%s | filename=%s | size=%.1fKB",
+                         ctx.platform, safe_filename, size_kb)
+                return f"✅ **{safe_filename}** ({size_kb:.1f} KB) delivered to {ctx.platform}!"
+            except Exception as exc:
+                log.warning("Platform upload failed, falling back to S3 storage: %s", exc)
+        else:
+            log.info("File size (%.1f MB) exceeds platform limit (%.1f MB); routing directly to S3",
+                     size_bytes / (1024 * 1024), platform_limit / (1024 * 1024))
+
+    # 3. Upload to S3StorageBackend & Generate Pre-signed URL (valid 24 hours)
+    try:
+        from core.storage import get_storage
+        storage = get_storage()
+        if storage is not None:
+            content_type, _ = mimetypes.guess_type(safe_filename)
+            content_type = content_type or "application/octet-stream"
+
+            dest_key = f"reports/{target}/{int(time.time())}_{safe_filename}"
+            s3_uri = await storage.upload_file(file_path, dest_key, content_type=content_type)
+            log.info("Uploaded to S3 | uri=%s | key=%s", s3_uri, dest_key)
+
+            presigned_url = await storage.generate_presigned_url(
+                dest_key,
+                expires_in=86400,
+                method="GET",
+                filename=safe_filename,
+                content_type=content_type,
+            )
+
+            return (
+                f"✅ **{safe_filename}** ({size_kb:.1f} KB) uploaded to secure storage.\n"
+                f"🔗 [Download {safe_filename}]({presigned_url})\n"
+                f"*(Download link valid for 24 hours)*"
+            )
+    except Exception as s3_exc:
+        log.warning("S3 storage upload failed (%s); falling back to local disk storage", s3_exc)
+
+    # 4. Fallback: save to /app/data/reports/
+    dest = _reports_dir() / safe_filename
     try:
         shutil.copy2(file_path, str(dest))
         return (
-            f"✅ **{filename}** ({size_kb:.1f} KB) saved to `/app/data/reports/{filename}`.\n"
-            f"Direct upload to chat was unavailable in this context."
+            f"✅ **{safe_filename}** ({size_kb:.1f} KB) saved to `/app/data/reports/{safe_filename}`.\n"
+            f"Direct upload to chat and object storage were unavailable in this context."
         )
     except Exception as exc:
         return f"❌ Upload failed and could not save locally: {exc}"
@@ -223,10 +286,10 @@ async def deliver_sandbox_file(filepath: str, description: str = "", session_id:
         except Exception:
             size_bytes = 0
 
-        # Check platform size limits
+        # Check platform size limits (if >50MB, log and route directly to S3 via _deliver_file)
         max_size = 50 * 1024 * 1024  # 50MB Telegram limit
         if size_bytes > max_size:
-            return f"❌ File too large: {size_bytes/1024/1024:.1f}MB (max 50MB). Compress or split the file first."
+            log.info("Sandbox file (%.1f MB) exceeds 50MB chat limit; routing directly to S3", size_bytes / (1024 * 1024))
         
         # 2. Extract the file securely via docker cp
         with tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix) as stable:

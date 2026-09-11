@@ -634,12 +634,11 @@ OmniAgent/
 │   ├── sandbox_tool.py         # Ubuntu 24.04 Docker sandbox orchestration
 │   └── openrouter_prober.py    # Free model auto-discovery daemon
 │
-├── dashboard/
-│   └── index.html              # Standalone admin dashboard (dark theme, no CDN)
+├── omni-dashboard/             # Modern React + Vite + Tailwind Admin Dashboard SPA
 │
 ├── models.json                 # Model registry — intelligence/speed/tool scores
 ├── Dockerfile                  # Multi-stage uv-powered build
-├── docker-compose.yml          # PostgreSQL + OmniAgent production config
+├── docker-compose.yml          # 8-Container Enterprise Stack (Postgres, Redis, MinIO, Grafana)
 ├── .env.example                # Fully documented configuration reference
 └── CONTRIBUTING.md
 ```

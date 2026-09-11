@@ -119,6 +119,10 @@ class Settings(BaseSettings):
     sandbox_memory_limit: str            = Field(default="1g")
     sandbox_cpu_quota: int               = Field(default=100_000)
     sandbox_max_concurrent: int          = Field(default=5)
+    docker_host: Optional[str]           = Field(
+        default=None,
+        description="Docker socket proxy host (e.g. tcp://docker-socket-proxy:2375)",
+    )
 
     # ── Storage & Retention Limits (Janitor Daemon) ───────────────────────────
     retention_reports_days: int          = Field(default=7, description="Days to keep generated files in /app/data/reports")

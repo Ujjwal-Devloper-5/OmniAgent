@@ -26,8 +26,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import mimetypes
+import os
+from pathlib import Path
 import re
 import shlex
+import shutil
+import tempfile
 import time
 from typing import Optional
 
@@ -37,6 +42,21 @@ from core.logger import get_logger
 from config import settings
 
 log = get_logger(__name__)
+
+
+def configure_docker_host() -> str | None:
+    """
+    Ensure settings.docker_host propagates to os.environ['DOCKER_HOST'].
+    Returns current active DOCKER_HOST or None.
+    """
+    host = getattr(settings, "docker_host", None) or os.environ.get("DOCKER_HOST")
+    if host:
+        os.environ["DOCKER_HOST"] = host
+    return os.environ.get("DOCKER_HOST")
+
+
+# Run on import
+configure_docker_host()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -48,6 +68,14 @@ _MAX_OUTPUT_CHARS      = 6_000     # Truncate long outputs
 
 # Resource constraints
 _PIDS_LIMIT    = 256              # Allow more processes for complex workloads
+
+# Binary file extensions redirected to S3 export
+_BINARY_EXTENSIONS = {
+    ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
+    ".xlsx", ".xls", ".docx", ".pptx", ".zip", ".tar", ".gz",
+    ".tgz", ".7z", ".parquet", ".arrow", ".bin", ".dat", ".mp3",
+    ".mp4", ".wav", ".avi", ".sqlite", ".db",
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Dangerous pattern blocklist
@@ -166,16 +194,18 @@ class _SandboxPool:
         except Exception as exc:
             log.error("Image pull failed: %s", exc)
 
-    async def _create_container(self, session_key: str) -> str:
-        """
-        Spin up a new isolated Docker container.
-        Returns container ID.
-        """
-        await self._ensure_image()
+    @staticmethod
+    def get_volume_name(session_key: str) -> str:
+        """Derive isolated named volume for session workspace."""
+        return f"omniagent-ws-{session_key[:16]}"
 
-        container_name = f"{_CONTAINER_PREFIX}-{session_key[:12]}-{int(time.time())}"
-
-        cmd = [
+    def _build_create_command(
+        self, session_key: str, container_name: str | None = None
+    ) -> list[str]:
+        """Construct secure docker run command with least privileges and volume isolation."""
+        if container_name is None:
+            container_name = f"{_CONTAINER_PREFIX}-{session_key[:12]}-{int(time.time())}"
+        return [
             "docker", "run",
             "--detach",
             "--rm",                            # Auto-remove when stopped
@@ -208,11 +238,21 @@ class _SandboxPool:
             "--env", "PIP_BREAK_SYSTEM_PACKAGES=1",
             # Named volume: persists /workspace across container restarts for
             # the same session key (first 16 hex chars = 64-bit session scope)
-            "--volume", f"omniagent-ws-{session_key[:16]}:/workspace",
+            "--volume", f"{self.get_volume_name(session_key)}:/workspace",
             # Keep alive
             _SANDBOX_IMAGE,
             "sleep", str(settings.sandbox_ttl_seconds),
         ]
+
+    async def _create_container(self, session_key: str) -> str:
+        """
+        Spin up a new isolated Docker container.
+        Returns container ID.
+        """
+        await self._ensure_image()
+
+        container_name = f"{_CONTAINER_PREFIX}-{session_key[:12]}-{int(time.time())}"
+        cmd = self._build_create_command(session_key, container_name)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -346,6 +386,36 @@ class _SandboxPool:
         except asyncio.TimeoutError:
             proc.kill()
             return "", f"Command timed out after {timeout}s", 124
+
+    async def extract_file(
+        self,
+        container_id: str,
+        container_filepath: str,
+        local_dest_path: str,
+    ) -> bool:
+        """
+        Extract a file from container to local host filesystem path via docker cp.
+        Works across local Docker and DOCKER_HOST socket proxy.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "cp", f"{container_id}:{container_filepath}", local_dest_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            if proc.returncode == 0:
+                return True
+            log.warning(
+                "docker cp failed for %s:%s: %s",
+                container_id[:12],
+                container_filepath,
+                stderr.decode(errors="replace"),
+            )
+            return False
+        except Exception as exc:
+            log.error("Failed to extract file via docker cp: %s", exc)
+            return False
 
     async def install_base_tools(self, container_id: str) -> None:
         """Install useful CLI tools in the container on first use."""
@@ -641,6 +711,11 @@ async def read_sandbox_file(
     if not safe_path:
         return "❌ Invalid filename."
 
+    # Binary file redirection: auto-export to S3 with pre-signed URL
+    suffix = Path(safe_path).suffix.lower()
+    if suffix in _BINARY_EXTENSIONS:
+        return await _export_sandbox_artifact_impl(safe_path, session_id=session_id)
+
     session_key = hashlib.sha256(session_id.encode()).hexdigest()[:16]
     pool = _get_pool()
 
@@ -695,6 +770,143 @@ async def list_sandbox_files(session_id: str = "default") -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Tool: export_sandbox_artifact
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _export_sandbox_artifact_impl(
+    filepath: str,
+    session_id: str = "default",
+    expires_in: int = 86400,
+) -> str:
+    """
+    Extract a generated file or artifact (PDF, image, CSV, binary, ZIP, report, data export)
+    from the sandbox workspace (/workspace/<filepath>), upload it to S3 object storage,
+    and return a secure pre-signed download URL.
+    """
+    if not filepath or not filepath.strip():
+        return "❌ No filepath provided."
+
+    # Normalize path: remove leading /workspace/ if present, reject traversal
+    clean_path = filepath.strip()
+    if clean_path.startswith("/workspace/"):
+        clean_path = clean_path[len("/workspace/"):]
+    elif clean_path.startswith("/"):
+        clean_path = clean_path.lstrip("/")
+
+    if ".." in clean_path:
+        return f"❌ Invalid path traversal attempt: '{filepath}'"
+
+    container_path = f"/workspace/{clean_path}"
+    filename = Path(clean_path).name
+
+    session_key = hashlib.sha256(session_id.encode()).hexdigest()[:16]
+    pool = _get_pool()
+
+    try:
+        container_id = await pool.get_or_create(session_key)
+    except Exception as exc:
+        return f"❌ Could not access sandbox container: {exc}"
+
+    # 1. Verify file exists in container
+    _, _, exit_code = await pool.exec_in(container_id, f"test -f '{container_path}'")
+    if exit_code != 0:
+        parent_dir = str(Path(container_path).parent)
+        ls_out, _, _ = await pool.exec_in(container_id, f"ls -la '{parent_dir}' 2>/dev/null || echo '(empty)'")
+        return (
+            f"❌ File not found in sandbox at: `{container_path}`\n"
+            f"Directory listing of `{parent_dir}`:\n```\n{ls_out[:500]}\n```"
+        )
+
+    # 2. Get file size
+    size_out, _, _ = await pool.exec_in(container_id, f"stat -c %s '{container_path}'")
+    try:
+        size_bytes = int(size_out.strip())
+    except (ValueError, TypeError):
+        size_bytes = 0
+    size_kb = size_bytes / 1024
+
+    # 3. Extract file to temporary local path
+    suffix = Path(filename).suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix="sb_artifact_") as tmp:
+        temp_dest = tmp.name
+
+    try:
+        success = await pool.extract_file(container_id, container_path, temp_dest)
+        if not success:
+            return f"❌ Failed to extract file `{container_path}` from sandbox."
+
+        # 4. Upload to S3StorageBackend
+        try:
+            from core.storage import get_storage
+            storage = get_storage()
+            if storage:
+                content_type, _ = mimetypes.guess_type(filename)
+                content_type = content_type or "application/octet-stream"
+
+                key = f"artifacts/{session_key}/{int(time.time())}_{filename}"
+                await storage.upload_file(temp_dest, key, content_type=content_type)
+                presigned_url = await storage.generate_presigned_url(
+                    key,
+                    expires_in=expires_in,
+                    method="GET",
+                    filename=filename,
+                    content_type=content_type,
+                )
+                hours = max(1, expires_in // 3600)
+                return (
+                    f"✅ Extracted artifact: **{filename}** ({size_kb:.1f} KB)\n"
+                    f"🔗 [Download {filename}]({presigned_url})\n"
+                    f"*(Download link valid for {hours} hours)*"
+                )
+        except Exception as s3_exc:
+            log.warning("S3 upload failed for sandbox artifact (%s); falling back to local copy", s3_exc)
+
+        # 5. Graceful fallback to local disk
+        try:
+            fallback_dir = Path("/app/data/reports/sandbox")
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+        except (PermissionError, OSError):
+            fallback_dir = Path("./data/reports/sandbox")
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+        local_dest = fallback_dir / filename
+        shutil.copy2(temp_dest, str(local_dest))
+        return (
+            f"✅ Extracted artifact: **{filename}** ({size_kb:.1f} KB)\n"
+            f"Saved to local server path: `{local_dest}`\n"
+            f"(Cloud object storage was unavailable in this context)"
+        )
+
+    finally:
+        try:
+            if os.path.exists(temp_dest):
+                os.unlink(temp_dest)
+        except Exception:
+            pass
+
+
+@tool
+async def export_sandbox_artifact(
+    filepath: str,
+    session_id: str = "default",
+    expires_in: int = 86400,
+) -> str:
+    """
+    Extract a generated file or artifact (PDF, image, CSV, binary, ZIP, report, data export)
+    from the sandbox workspace (/workspace/<filepath>), upload it to S3 object storage,
+    and return a secure pre-signed download URL.
+
+    Args:
+        filepath: Path to file inside sandbox (e.g. 'output/report.pdf' or '/workspace/chart.png').
+        session_id: Session identifier matching the container session where file was created.
+        expires_in: Pre-signed URL expiration time in seconds (default: 86400 = 24 hours).
+
+    Returns:
+        User-friendly markdown with artifact details and download link.
+    """
+    return await _export_sandbox_artifact_impl(filepath, session_id=session_id, expires_in=expires_in)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Export
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -703,4 +915,5 @@ SANDBOX_TOOLS = [
     write_sandbox_file,
     read_sandbox_file,
     list_sandbox_files,
+    export_sandbox_artifact,
 ]

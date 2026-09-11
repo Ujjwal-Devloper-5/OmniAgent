@@ -52,6 +52,28 @@ dependencies = [
     "langchain-mcp-adapters>=0.1.0",
     "google-generativeai>=0.8.6",
     "trafilatura>=1.12.0",
+    # Observability & Infrastructure (Phase 7 Enterprise Hardening)
+    "prometheus_client>=0.20.0",
+    "redis[asyncio]>=5.0.0",
+    "boto3>=1.34.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "-m 'not live'"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+markers = [
+    "unit: Unit tests with zero external dependencies",
+    "live: Live tests requiring running services",
+    "integration: Multi-component integration tests",
 ]
 
 [project.scripts]
@@ -60,3 +82,4 @@ omniagent = "main:main"
 [build-system]
 requires = ["uv_build>=0.12.2,<0.13.0"]
 build-backend = "uv_build"
+

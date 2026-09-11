@@ -1,4 +1,43 @@
 services:
+  # ── Security-Hardened Docker Socket Proxy ──────────────────────────────────
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.1.2
+    container_name: omniagent_socket_proxy
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1
+      - POST=1
+      - EXEC=1
+      - IMAGES=1
+      - VOLUMES=1
+      - NETWORKS=1
+      - INFO=1
+      - PING=1
+      - VERSION=1
+      - AUTH=0
+      - BUILD=0
+      - COMMIT=0
+      - CONFIGS=0
+      - DISTRIBUTION=0
+      - EVENTS=0
+      - NODES=0
+      - PLUGINS=0
+      - SECRETS=0
+      - SERVICES=0
+      - SESSION=0
+      - SWARM=0
+      - SYSTEM=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socket_proxy_net
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: '3'
+
+  # ── PostgreSQL Database ───────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: omniagent_postgres
@@ -8,11 +47,11 @@ services:
       POSTGRES_USER: omniagent
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omniagent_secret}
     volumes:
-    - omniagent_pgdata:/var/lib/postgresql/data
+      - omniagent_pgdata:/var/lib/postgresql/data
     healthcheck:
       test:
-      - CMD-SHELL
-      - pg_isready -U omniagent
+        - CMD-SHELL
+        - pg_isready -U omniagent
       interval: 10s
       timeout: 5s
       retries: 5
@@ -21,6 +60,10 @@ services:
       options:
         max-size: 5m
         max-file: '3'
+    networks:
+      - default
+
+  # ── OmniAgent Main Service ────────────────────────────────────────────────
   omniagent:
     build:
       context: .
@@ -29,31 +72,34 @@ services:
     image: omniagent:latest
     container_name: omniagent
     restart: unless-stopped
-    cap_add:
-    - SYS_ADMIN
     security_opt:
-    - seccomp=unconfined
+      - no-new-privileges:true
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
     env_file:
-    - .env
+      - .env
     environment:
-    - DATABASE_URL=postgresql+asyncpg://omniagent:${POSTGRES_PASSWORD:-omniagent_secret}@postgres:5432/omniagent
-    - OLLAMA_BASE_URL=http://host.docker.internal:11434
-    group_add:
-    - '958'
+      - DATABASE_URL=postgresql+asyncpg://omniagent:${POSTGRES_PASSWORD:-omniagent_secret}@postgres:5432/omniagent
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
     extra_hosts:
-    - host.docker.internal:host-gateway
+      - host.docker.internal:host-gateway
     ports:
-    - 8181:8080
+      - 8080:8080
     volumes:
-    - .:/app:ro
-    - ./mcp.json:/app/mcp.json:ro
-    - omniagent_venv:/app/.venv
-    - omniagent_data:/app/data
-    - omniagent_logs:/app/logs
-    - /var/run/docker.sock:/var/run/docker.sock
+      - .:/app:ro
+      - ./mcp.json:/app/mcp.json:ro
+      - omniagent_venv:/app/.venv
+      - omniagent_data:/app/data
+      - omniagent_logs:/app/logs
+    networks:
+      - default
+      - socket_proxy_net
     deploy:
       resources:
         limits:
@@ -69,14 +115,16 @@ services:
         max-file: '5'
     healthcheck:
       test:
-      - CMD
-      - python
-      - -c
-      - import sys; sys.exit(0)
+        - CMD
+        - python
+        - -c
+        - import sys; sys.exit(0)
       interval: 60s
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  # ── Dashboard UI ──────────────────────────────────────────────────────────
   omni-dashboard:
     build:
       context: ./omni-dashboard
@@ -85,14 +133,112 @@ services:
     container_name: omni_dashboard
     restart: unless-stopped
     ports:
-    - 3000:80
+      - 3000:80
     depends_on:
-    - omniagent
+      - omniagent
     logging:
       driver: json-file
       options:
         max-size: 5m
         max-file: '3'
+    networks:
+      - default
+
+  # ── Redis (Sliding-Window Rate Limiting) ───────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: omniagent_redis
+    restart: unless-stopped
+    ports:
+      - 6379:6379
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: '3'
+    networks:
+      - default
+
+  # ── MinIO S3 Object Storage ───────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: omniagent_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - 9000:9000
+      - 9001:9001
+    volumes:
+      - omniagent_minio_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - mc
+        - ready
+        - local
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: '3'
+    networks:
+      - default
+
+  # ── Prometheus Observability Scraper ──────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: omniagent_prometheus
+    restart: unless-stopped
+    ports:
+      - 9090:9090
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - omniagent_prometheus_data:/prometheus
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: '3'
+    networks:
+      - default
+
+  # ── Grafana Observability Dashboards ──────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: omniagent_grafana
+    restart: unless-stopped
+    ports:
+      - 3001:3000
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - omniagent_grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: '3'
+    networks:
+      - default
+
 volumes:
   omniagent_pgdata:
     driver: local
@@ -102,3 +248,16 @@ volumes:
     driver: local
   omniagent_logs:
     driver: local
+  omniagent_minio_data:
+    driver: local
+  omniagent_prometheus_data:
+    driver: local
+  omniagent_grafana_data:
+    driver: local
+
+networks:
+  default:
+    driver: bridge
+  socket_proxy_net:
+    driver: bridge
+    internal: true
